@@ -1,6 +1,6 @@
 import os
 from typing import Dict
-
+import albumentations as albu
 from albumentations import *
 from transformers import AutoTokenizer
 
@@ -25,7 +25,36 @@ def load_tokenizer(source, pretrained_model_name_or_path, cache_dir, **kwargs):
 
 def load_transform(split: str = "train", transform_config: Dict = None):
     img_size = 1344 # force swin resolution
-    if split == "train"
+    if split == "train":
+        return albu.Compose([
+            
+            #resize
+            albu.Resize(height=img_size, width=img_size),
+            
+            #flip horizontal, flipping vertically does not make sense medically due to breast sagging
+            #flip with a probability of 0.5
+            albu.HorizontalFlip(p=0.5),
+            
+            #texture augmentation
+            albu.RandomBrightnessContrast(brightness_limit= 0.1, contrast_limit=0.1, p=0.5),
+            albu.OneOf([
+                albu.GaussianBlur(blur_limit=(3,5), p=0.5),
+                albu.Sharpen(alpha=(0.2, 0.5), lightness=(0.5,1.0), p = 0.5),
+                
+            ], p = 0.4),
+            
+            albu.GaussNoise(std_range=(0.2,0.44), p = 0.4),
+            
+            albu.Normalize(mean = (0.485, 0.465, 0.406), std=(0.229, 0.224, 0.225)),
+            ToTensorV2(),
+        ])
+    else:
+        #valid / test/ aug
+        return albu.Compose([
+            albu.Resize(height=img_size, width=img_size),
+            albu.Normalize(mean= (0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+            ToTensorV2(),
+        ])
     #this is contradicts my propsal, i need to implement a density aware augmentation
     """assert split in {"train", "valid", "test", "aug"}
     transforms = transform_config[split]
