@@ -4,7 +4,7 @@ from typing import Dict
 from albumentations import *
 from transformers import AutoTokenizer
 
-
+#basically for text
 def load_tokenizer(source, pretrained_model_name_or_path, cache_dir, **kwargs):
     if source == "huggingface":
         tokenizer = AutoTokenizer.from_pretrained(
@@ -21,9 +21,13 @@ def load_tokenizer(source, pretrained_model_name_or_path, cache_dir, **kwargs):
 
     return tokenizer
 
+# for images
 
 def load_transform(split: str = "train", transform_config: Dict = None):
-    assert split in {"train", "valid", "test", "aug"}
+    img_size = 1344 # force swin resolution
+    if split == "train"
+    #this is contradicts my propsal, i need to implement a density aware augmentation
+    """assert split in {"train", "valid", "test", "aug"}
     transforms = transform_config[split]
     if split == "train":
         if (transforms["Resize"]["size_h"] == 512 or transforms["Resize"]["size_h"] == 224) and (
@@ -65,3 +69,4 @@ def load_transform(split: str = "train", transform_config: Dict = None):
             return Compose([
                 Resize(width=transforms["Resize"]["size_h"], height=transforms["Resize"]["size_w"])
             ])
+            """

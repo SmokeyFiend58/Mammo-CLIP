@@ -6,7 +6,6 @@ from torch.nn import Parameter
 from torchvision.models.resnet import resnet50, resnet152, resnet101
 from transformers import AutoConfig, AutoModel, SwinModel, ViTModel
 
-
 class HuggingfaceImageEncoder(nn.Module):
     def __init__(
             self,
@@ -38,7 +37,7 @@ class HuggingfaceImageEncoder(nn.Module):
         if gradient_checkpointing and self.image_encoder.supports_gradient_checkpointing:
             self.image_encoder.gradient_checkpointing_enable()
 
-        self.out_dim = self.image_encoder.config.hidden_size
+        self.outDim = self.image_encoder.config.hidden_size
 
     def forward(self, image):
         if self.model_type == "vit":
@@ -114,8 +113,38 @@ class EfficientNet_Mammo(nn.Module):
         x = self.model.forward_features(x)
         x = self.pool(x)
         return x
+class SwinTransformer_Mammo(nn.Module):
+    #Swin Transformer Wrapper that mimics EfficientNet_Mammo but handles
+    #swin tensor shapes and high res
+    def __init__(self, name: str = "swin_tiny_patch4_window7_224", pretrained = False, in_chans=3,  img_size = 1344, p=3, p_trainable = False, eps = 1e-6):
+        super().__init__()
+        #load Swin from timm
+        self.model = timm.create_model(name, pretrained=pretrained, in_chans=in_chans, img_size = img_size, numclasses = 0)
+        #remove classification head
+        
+        #swin-tiny output dimension is 768
+        self.outDim = self.model.num_features
+        
+        #use same GeM pooling as EfficientNet 
+        self.pool = nn.Sequential(GeM(p=p, eps=eps, p_trainable=p_trainable), nn.Flatten())
+    def forward(self, x):
+        # Get features
+        # swin returns: (Batch, H, W, Channels) - channel last
+        
+        x = self.model.forward_features(x)
+        # fix shape for pooling Gem expects (Batch, Channels, H, W) - channel first
 
-
+        x = x.permute(0,3,1,2)
+        
+        # pool
+        x = self.pool(x)
+        return x
+        
+        #note!!! Gem = generalized mean pooling, uses parameter p to slide between 2: 
+        # if p =1, acts like average pooling
+        # if p is inifinity it acts like max pooling
+        # p_trainable means it can learn the best value of p, figures it out on its own whether t needs to focus on sharp details blah blah blah
+        
 class ResNet(nn.Module):
     def __init__(self, name: str = "resnet50", pretrained: bool = True):
         super().__init__()
