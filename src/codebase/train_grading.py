@@ -28,7 +28,7 @@ class MultiHeadSwin(nn.Module):
     
         self.encoder = SwinTransformer_Mammo(
             name = encoder_name,
-            pretrained= True
+            pretrained= True,
             img_size= img_size
         )
         inputDim = self.encoder.outDim
@@ -112,4 +112,15 @@ def config():
     return parser.parse_args()
 def main(args):
     seed_all(args.seed)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Starting Training on: {device}")
+    
+    #output setup
+    os.makedirs(args.out_path, exist_ok= True)
+    writer = SummaryWriter(log_dir = os.path.join(args.output_path, "logs"))
+    
+    #transforms
+    train_tfm = load_transform(split="train")
+    valid_tfm = load_transform(split = "valid")
+    
     
