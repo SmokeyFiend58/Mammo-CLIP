@@ -94,7 +94,7 @@ class VinDrSwinDataset(Dataset):
 def config():
     parser = argparse.ArgumentParser()
     # Paths
-    parser.add_argument("--csv-file", default=r"C:\Users\louis\Documents\TYP\GhoshData\vindr_detection_v1_folds.csv", type=str)
+    parser.add_argument("--csv-file", default=r"C:\Users\louis\Documents\TYP\finding_annotations.csv", type=str)
     parser.add_argument("--img-dir", default=r"C:\Users\louis\Documents\TYP\GhoshData\vindr-mammo-ghosh-png\images_png", type=str)
     parser.add_argument("--output_path", default="./output_swin", type=str)
     
@@ -116,7 +116,7 @@ def main(args):
     print(f"Starting Training on: {device}")
     
     #output setup
-    os.makedirs(args.out_path, exist_ok= True)
+    os.makedirs(args.output_path, exist_ok= True)
     writer = SummaryWriter(log_dir = os.path.join(args.output_path, "logs"))
     
     #transforms
