@@ -123,4 +123,63 @@ def main(args):
     train_tfm = load_transform(split="train")
     valid_tfm = load_transform(split = "valid")
     
+    #datasets
+    #in real thing, split the csv's into the splits already predefineed
+    #for now, load the same csv for both to get something running
+    
+    train_ds = VinDrSwinDataset(args.csv_file, args.img_dir, transform=train_tfm)
+    train_loader = DataLoader(train_ds, batch_size= args.batch_size, shuffle=True)
+    
+    print(f"Dataset loaded{len(train_ds)}")
+    
+    #model
+    model = MultiHeadSwin(args.arch, args.img_size).to(device)
+    
+    #optimizer and loss
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    criteria_d = nn.CrossEntropyLoss()
+    criteria_b = nn.CrossEntropyLoss()
+    
+    #training loop
+    
+    for epoch in range(args.epochs):
+        print(f"\nEpoch {epoch}/{args.epochs}")
+        
+        model.train()
+        train_loss = 0
+        loop = tqdm(train_loader, desc="Training")
+        
+        for images, labels_d, labels_b in loop:
+            images, labels_d, labels_b = images.to(device), labels_d.to(device), labels_b.to(device)
+            
+            optimizer.zero_grad()
+            
+            logits_d, logits_b = model(images)
+            
+            #calc loss (calc short for calculate)
+            
+            loss_d = criteria_d(logits_d, labels_d)
+            loss_b = criteria_b(logits_b, labels_b)
+            
+            loss = loss_b +loss_d
+            
+            #back pass
+            loss.backward()
+            optimizer.step()
+            
+            train_loss += loss.item()
+            loop.set_postfix(loss=loss.item())
+            
+        avg_train_loss = train_loss / len(train_loader)
+        writer.add_scalar("Loss/Train", avg_train_loss, epoch)
+        print(f"Avg Loss: {avg_train_loss:.4f}")
+        
+        #save every epoch to not lose progess
+        torch.save(model.state_dict(), os.path.join(args.output_path, f"Swin_epoch_{epoch+1}.pth"))
+    print("Training Complete")
+    writer.close()
+    
+if __name__ == "__main__":
+    args = config()
+    main(args) 
     
