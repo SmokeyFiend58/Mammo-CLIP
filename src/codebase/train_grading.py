@@ -11,7 +11,7 @@ from PIL import Image
 from tqdm import tqdm
 from sklearn.metrics import f1_score, accuracy_score
 from torch.utils.tensorboard import SummaryWriter
-
+from sklearn.model_selection import train_test_split
 from utils import seed_all
 from breastclip.model.modules.image_encoder import SwinTransformer_Mammo
 
@@ -48,11 +48,12 @@ class MultiHeadSwin(nn.Module):
     
 #dataset handler
 class VinDrSwinDataset(Dataset):
-    def __init__(self, csv_path, img_dir, transform = None):
-        self.data = pd.read_csv(csv_path)
+    def __init__(self, dataframe, img_dir, split_group = "training", transform = None):
+        self.data = dataframe.reset_index(drop= True)
         self.img_dir = img_dir
         self.transform = transform
         
+    
         #map density from letters to numbes
         self.density_map = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
         
@@ -83,10 +84,16 @@ class VinDrSwinDataset(Dataset):
         
         #get labels
         density_val = row.get('breast_density', 'B') #default to B if missing???
-        birads_val = row.get('breast_birads', 1) # default to 1 if missing
-        if isinstance(density_val, str) and len(density_val) > 1:
-            density_val = density_val[-1] #take last character
+        if isinstance(density_val, str) and len(density_val)>1:
+            density_val = density_val[-1]
         
+        birads_val = row.get('breast_birads', 1) # default to 1 if missing
+        if isinstance(birads_val, str):
+            try:
+                birads_val = int(birads_val.split(' ')[-1])
+            except ValueError:
+                birads_val = 1 #fallback
+                
         
         label_d = torch.tensor(self.density_map.get(density_val, 1), dtype=torch.long)
         label_b = torch.tensor(self.birads_map.get(birads_val, 0), dtype= torch.long)
@@ -107,6 +114,8 @@ def config():
     parser.add_argument("--epochs", default=20, type=int)
     parser.add_argument("--lr", default=1e-4, type=float)
     parser.add_argument("--seed", default=42, type=int)
+    parser.add_argument("--val-split", default=0.2, type=float)
+
     parser.add_argument("--num-workers", default=0, type=int) # Set 0 for Windows compatibility
     
     return parser.parse_args()
@@ -119,7 +128,34 @@ def main(args):
     os.makedirs(args.output_path, exist_ok= True)
     writer = SummaryWriter(log_dir = os.path.join(args.output_path, "logs"))
     
-    #transforms
+    #load all data
+    full_dataFrame = pd.read_csv(args.csv_file)
+    
+    #isolate training data
+    if 'split' in full_dataFrame.columns:
+        
+        train_full_dataframe = full_dataFrame[full_dataFrame['split'] == 'training']
+    else: 
+        train_full_dataframe = full_dataFrame
+        print("Warning warning warning: no split column for some stupid reason")
+    
+    #create train/val split
+    #stratified split also
+    train_dataframe, validation_dataframe = train_test_split(train_full_dataframe, test_size= args.val_split, random_state=args.seed, stratify=train_full_dataframe['breast_density'] if 'breast_density' in train_full_dataframe.columns else None)
+    # it says test size in the function but the only data available to get is from the training split so dont worry
+    
+    #now actually create the datasets
+    
+    train_tfm = load_transform(split = "train")
+    train_ds = VinDrSwinDataset(train_dataframe, args.img_dir, transform= train_tfm)
+    train_loader = DataLoader(train_ds, batch_size = args.batch_size, shuffle= True)
+    
+    # validation (no augmentation, just resize)
+    valid_tfm = load_transform(split = "valid")
+    valid_ds = VinDrSwinDataset(validation_dataframe, args.img_dir, transform= valid_tfm)
+    valid_loader = DataLoader(valid_ds, batch_size= args.batch_size, shuffle=False)
+    
+    """#transforms
     train_tfm = load_transform(split="train")
     valid_tfm = load_transform(split = "valid")
     
@@ -131,6 +167,7 @@ def main(args):
     train_loader = DataLoader(train_ds, batch_size= args.batch_size, shuffle=True)
     
     print(f"Dataset loaded{len(train_ds)}")
+    """
     
     #model
     model = MultiHeadSwin(args.arch, args.img_size).to(device)
@@ -172,6 +209,26 @@ def main(args):
             
         avg_train_loss = train_loss / len(train_loader)
         writer.add_scalar("Loss/Train", avg_train_loss, epoch)
+        
+        model.eval()
+        
+        val_loss = 0 
+        
+        with torch.no_grad():
+            for images, labels_d, labels_b in valid_loader:
+                images = images.to(device)
+                labels_d = labels_d.to(device)
+                labels_b = labels_b.to(device)
+                
+                logits_d, logits_b = model(images)
+                
+                loss_d = criteria_d(logits_d, labels_d)
+                loss_b = criteria_b(logits_b, labels_b)
+                
+                val_loss += (loss_d + loss_b).item()
+        avg_val_loss = val_loss / len(valid_loader)
+        writer.add_scalar("Loss/Validation", avg_val_loss, epoch)
+        
         print(f"Avg Loss: {avg_train_loss:.4f}")
         
         #save every epoch to not lose progess
