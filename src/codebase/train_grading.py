@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import pandas as pd
 import numpy as np
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from PIL import Image
 from tqdm import tqdm
 from sklearn.metrics import f1_score, accuracy_score
@@ -16,6 +16,7 @@ from utils import seed_all
 from breastclip.model.modules.image_encoder import SwinTransformer_Mammo
 
 from breastclip.data.data_utils import load_transform
+from breastclip.data.data_utils import get_density_transforms
 
 warnings.filterwarnings("ignore")
 
@@ -48,12 +49,14 @@ class MultiHeadSwin(nn.Module):
     
 #dataset handler
 class VinDrSwinDataset(Dataset):
-    def __init__(self, dataframe, img_dir, split_group = "training", transform = None):
+    def __init__(self, dataframe, img_dir, transform_dict = None,split_group = "training"):
         self.data = dataframe.reset_index(drop= True)
         self.img_dir = img_dir
-        self.transform = transform
+        self.transform_dict = transform_dict
+        self.split_group = split_group
         
-    
+        self.rare_density = ['A', 'B', 'D']
+        
         #map density from letters to numbes
         self.density_map = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
         
@@ -73,31 +76,41 @@ class VinDrSwinDataset(Dataset):
         img_path = os.path.join(self.img_dir, studyFolder, imgID)
         
         image = Image.open(img_path).convert("RGB")
-        
+        image_np = np.array(image)
         #apply augmentation
         
-        if self.transform:
-            #ablumentations expects numpy array
-            image_np = np.array(image)
-            augmented = self.transform(image = image_np)
-            image = augmented["image"] 
-        
-        #get labels
-        density_val = row.get('breast_density', 'B') #default to B if missing???
+        density_val = row.get('breast_density', 'C')
         if isinstance(density_val, str) and len(density_val)>1:
             density_val = density_val[-1]
+        else:
+            density_val = 'C'
         
-        birads_val = row.get('breast_birads', 1) # default to 1 if missing
+        selected_transform = None
+        
+        if self.split_group == 'valid':
+            selected_transform = self.transform_dict['valid']
+        else:
+            if density_val in self.rare_density:
+                selected_transform = self.transform_dict['rare']
+            else:
+                selected_transform = self.transform_dict['common']
+        
+        if selected_transform:
+            augmented = selected_transform(image= image_np)
+            image = augmented["image"]
+        
+        birads_val = row.get('breast_birads', 1)
         if isinstance(birads_val, str):
             try:
                 birads_val = int(birads_val.split(' ')[-1])
             except ValueError:
-                birads_val = 1 #fallback
-                
+                birads_val = 1
         
         label_d = torch.tensor(self.density_map.get(density_val, 1), dtype=torch.long)
         label_b = torch.tensor(self.birads_map.get(birads_val, 0), dtype= torch.long)
+    
         return image, label_d, label_b
+    
 def config():
     parser = argparse.ArgumentParser()
     # Paths
@@ -144,17 +157,26 @@ def main(args):
     train_dataframe, validation_dataframe = train_test_split(train_full_dataframe, test_size= args.val_split, random_state=args.seed, stratify=train_full_dataframe['breast_density'] if 'breast_density' in train_full_dataframe.columns else None)
     # it says test size in the function but the only data available to get is from the training split so dont worry
     
+    #clean labels for weight calculation
+    train_dataframe['clean_density'] = train_dataframe['breast_density'].apply(lambda x: x[-1] if isinstance(x, str) and len(x) >1 else 'C')
+    
+    class_counts = train_dataframe['clean_density'].value_counts().sort_index()
+    
+    class_weights = 1.0/ class_counts
+    #assign weights
+    sample_weights = train_dataframe['clean_density'].map(class_weights).values
+    
+    sampler = WeightedRandomSampler(weights=torch.from_numpy(sample_weights).double(), num_samples=len(train_dataframe), replacement=True)
+    
     #now actually create the datasets
+    tfm_dict = get_density_transforms(img_size = args.img_size)
+    train_ds = VinDrSwinDataset(train_dataframe, args.img_dir, transform_dict= tfm_dict, split_group="train")
+    train_loader = DataLoader(train_ds, batch_size = args.batch_size, sampler=sampler,shuffle= False, num_workers=args.num_workers)
     
-    train_tfm = load_transform(split = "train")
-    train_ds = VinDrSwinDataset(train_dataframe, args.img_dir, transform= train_tfm)
-    train_loader = DataLoader(train_ds, batch_size = args.batch_size, shuffle= True)
-    
-    # validation (no augmentation, just resize)
-    valid_tfm = load_transform(split = "valid")
-    valid_ds = VinDrSwinDataset(validation_dataframe, args.img_dir, transform= valid_tfm)
+    valid_ds = VinDrSwinDataset(validation_dataframe, args.img_dir, transform_dict= tfm_dict, split_group="valid")
     valid_loader = DataLoader(valid_ds, batch_size= args.batch_size, shuffle=False)
     
+
     """#transforms
     train_tfm = load_transform(split="train")
     valid_tfm = load_transform(split = "valid")
