@@ -1,4 +1,4 @@
-#new file for training on density/ BI-RADS grading.
+#new file for training on density/ BI-RADS grading. Just image only
 import warnings
 import argparse
 import os
@@ -16,7 +16,7 @@ from utils import seed_all
 from breastclip.model.modules.image_encoder import SwinTransformer_Mammo
 
 from breastclip.data.data_utils import load_transform
-from breastclip.data.data_utils import get_density_transforms
+from breastclip.data.data_utils import get_density_augmentation
 
 warnings.filterwarnings("ignore")
 
@@ -169,7 +169,7 @@ def main(args):
     sampler = WeightedRandomSampler(weights=torch.from_numpy(sample_weights).double(), num_samples=len(train_dataframe), replacement=True)
     
     #now actually create the datasets
-    tfm_dict = get_density_transforms(img_size = args.img_size)
+    tfm_dict = get_density_augmentation(img_size = args.img_size)
     train_ds = VinDrSwinDataset(train_dataframe, args.img_dir, transform_dict= tfm_dict, split_group="train")
     train_loader = DataLoader(train_ds, batch_size = args.batch_size, sampler=sampler,shuffle= False, num_workers=args.num_workers)
     
