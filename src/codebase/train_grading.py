@@ -17,11 +17,12 @@ from breastclip.model.modules.image_encoder import SwinTransformer_Mammo
 
 from breastclip.data.data_utils import load_transform
 from breastclip.data.data_utils import get_density_augmentation
+from breastclip.model.losses import OrdinalRegressionLoss, DensityMSELoss
 
 warnings.filterwarnings("ignore")
 
 class MultiHeadSwin(nn.Module):
-    def __init__(self, encoder_name, img_size, num_density = 4, num_birads = 5):
+    def __init__(self, encoder_name, img_size, density_loss_type = 'ce', birads_loss_type = 'ce'):
         super().__init__()
 
     
@@ -32,13 +33,26 @@ class MultiHeadSwin(nn.Module):
             pretrained= True,
             img_size= img_size
         )
-        inputDim = self.encoder.outDim
-
+        inputDim = getattr(self.encoder, "outDim", getattr(self.encoder, "out_dim", 768))
+                                        #could be out_dim i cant remember
+                                        
+                                        
+                                        
+        
         #head 1 density
-        self.head_density = nn.Linear(inputDim, num_density)
+        if density_loss_type == 'mse':
+            self.head_density = nn.Linear(inputDim, 1)
+        else:
+            self.head_density = nn.Linear(inputDim, 4)
+        
+       
         
         # head 2 birads
-        self.head_birads = nn.Linear(inputDim, num_birads)
+        if birads_loss_type == 'ordinal':
+            self.head_birads = nn.Linear(inputDim, 4)
+        else:
+            self.head_birads = nn.Linear(inputDim, 5)
+            
         
     def forward(self, x):
         features = self.encoder(x)
@@ -131,6 +145,11 @@ def config():
 
     parser.add_argument("--num-workers", default=0, type=int) # Set 0 for Windows compatibility
     
+    
+    parser.add_argument("--density-loss", default= "ce", choices=["ce", "mse"], help="Loss for density")
+    parser.add_argument("--birads-loss", default="ce", choices=["ce", "ordinal"], help="Loss for BIRADS")
+    
+    
     return parser.parse_args()
 def main(args):
     seed_all(args.seed)
@@ -192,12 +211,21 @@ def main(args):
     """
     
     #model
-    model = MultiHeadSwin(args.arch, args.img_size).to(device)
+    model = MultiHeadSwin(args.arch, args.img_size, density_loss_type=args.density_loss, birads_loss_type=args.birads_loss).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    
+    if args.density_loss == 'mse':
+        criteria_d = DensityMSELoss()
+    else: 
+        criteria_d = nn.CrossEntropyLoss()
+    if args.birads_loss == 'ordinal':
+        criteria_b = OrdinalRegressionLoss()
+    else:
+        criteria_b = nn.CrossEntropyLoss()
     
     #optimizer and loss
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    criteria_d = nn.CrossEntropyLoss()
-    criteria_b = nn.CrossEntropyLoss()
+    ##criteria_d = nn.CrossEntropyLoss()
+    ###criteria_b = nn.CrossEntropyLoss()
     
     #training loop
     
@@ -234,7 +262,11 @@ def main(args):
         
         model.eval()
         
-        val_loss = 0 
+        val_loss = 0
+        correct_d = 0
+        correct_b = 0
+        total_samples = 0
+        
         
         with torch.no_grad():
             for images, labels_d, labels_b in valid_loader:
@@ -248,10 +280,38 @@ def main(args):
                 loss_b = criteria_b(logits_b, labels_b)
                 
                 val_loss += (loss_d + loss_b).item()
+                
+                ##decode predictions
+                if args.density_loss == 'mse':
+                    preds_d = torch.round(logits_d).squeeze().clamp(0, 3).long()
+                else: 
+                    #arg max
+                    preds_d = torch.argmax(logits_d, dim = 1)
+                
+                #birads decoding
+                if args.birads_loss == 'ordinal':
+                    #count how many thresholds are passed
+                    preds_b = (logits_b > 0).sum(dim=1)
+                else:
+                    preds_b = torch.argmax(logits_b, dim=1)
+                correct_d += (preds_d == labels_d).sum().item()
+                correct_b += (preds_b == labels_b).sum().item()
+                
+                total_samples += labels_d.size(0)
+                
+                                
         avg_val_loss = val_loss / len(valid_loader)
+        acc_d = correct_d / total_samples
+        acc_b = correct_b / total_samples
+        
         writer.add_scalar("Loss/Validation", avg_val_loss, epoch)
+        writer.add_scalar("Accuracy/Density", acc_d, epoch)
+        writer.add_scalar("Accuracy/BIRADS", acc_b, epoch)
+        
         
         print(f"Avg Loss: {avg_train_loss:.4f}")
+        print(f"Density Acc: {acc_d:.4f} |||| BI-RADS Acc: {acc_b:.4f}")
+
         
         #save every epoch to not lose progess
         torch.save(model.state_dict(), os.path.join(args.output_path, f"Swin_epoch_{epoch+1}.pth"))
