@@ -8,8 +8,10 @@ from breastclip.model.modules.image_encoder import SwinTransformer_Mammo
 from breastclip.model.modules.text_encoder import HuggingfaceTextEncoder
 
 class MammoCLIP(nn.Module):
-    def __init__(self, image_encoder_name = "swin_tiny_patch4_window7_224", text_encoder_name = "emilyalsentzer/Bio_ClinicalBERT", img_size = 1344, embed_dim = 256,):
+    def __init__(self, image_encoder_name = "swin_tiny_patch4_window7_224", text_encoder_name = "emilyalsentzer/Bio_ClinicalBERT", img_size = 1344, embed_dim = 256,use_aux_heads = True): # aux heads are for activiating a novelty
         super().__init__()
+        self.use_aux_heads = use_aux_heads
+        
         
         #image branch
         self.visual = SwinTransformer_Mammo(name=image_encoder_name, pretrained=True, img_size=img_size)
@@ -32,6 +34,20 @@ class MammoCLIP(nn.Module):
         # Initialize it to log(1/0.07) like the Mammo-CLIP paper
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1/0.07))
         
+        #3 heads on the image tower
+        if self.use_aux_heads:
+            #Head A: density class (ordinal: 4 classes -> 3 thresholds)
+            self.head_density_class = nn.Linear(visual_dim, 3)
+            
+            #head b: density % (regression: mean and logVar)
+            self.head_density_perc = nn.Linear(visual_dim, 2)
+            
+            #head c: BIRADS (ordinal: 5 classes -> 4 thresholds)
+            self.head_birads = nn.Linear(visual_dim, 4)
+            
+        
+        
+        
     def forward(self, image, text_inputs):
         # image [batch_size, 3, H, W]
         # text inputs: dictionary from tokenizer containing input_ids and attention_mask
@@ -42,6 +58,8 @@ class MammoCLIP(nn.Module):
         #text encoding 
         # text encoder returns batch, seq length, text_dim
         text_ouputs = self.text_encoder(text_inputs)
+        
+        
         
         #pooling: take the first token CLS (index 0) to represent the sentence
         text_features = text_ouputs[:, 0, :]
@@ -54,6 +72,18 @@ class MammoCLIP(nn.Module):
         # normalise vectors to length 1
         image_embeds = image_embeds / image_embeds.norm(dim=1, keepdim = True)
         text_embeds = text_embeds / text_embeds.norm(dim = 1, keepdim = True)
+        
+        #auxlirary outputs!!
+        if self.use_aux_heads:
+            d_class = self.head_density_class(images_features)
+            
+            d_perc = self.head_density_perc(images_features)
+            mu, logVar = d_perc[:, 0], d_perc[:, 1]
+            
+            b_out = self.head_birads(images_features)
+            
+            #return everything
+            return image_embeds, text_embeds, self.logit_scale.exp(), images_features, d_class, mu, logVar, b_out
         
         return image_embeds, text_embeds, self.logit_scale.exp()
     
