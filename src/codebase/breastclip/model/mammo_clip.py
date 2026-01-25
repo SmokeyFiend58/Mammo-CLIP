@@ -8,7 +8,7 @@ from breastclip.model.modules.image_encoder import SwinTransformer_Mammo
 from breastclip.model.modules.text_encoder import HuggingfaceTextEncoder
 
 class MammoCLIP(nn.Module):
-    def __init__(self, image_encoder_name = "swin_tiny_patch4_window7_224", text_encoder_name = "emilyalsentzer/Bio_ClinicalBERT", img_size = 1344, embed_dim = 256,use_aux_heads = True): # aux heads are for activiating a novelty
+    def __init__(self, image_encoder_name = "swin_tiny_patch4_window7_224", text_encoder_name = "emilyalsentzer/Bio_ClinicalBERT", img_size = 1344, embed_dim = 256,use_aux_heads = False): # aux heads are for activiating a novelty
         super().__init__()
         self.use_aux_heads = use_aux_heads
         
@@ -16,8 +16,9 @@ class MammoCLIP(nn.Module):
         #image branch
         self.visual = SwinTransformer_Mammo(name=image_encoder_name, pretrained=True, img_size=img_size)
         
-        visual_dim = self.visual.outDim
-        
+#        visual_dim = self.visual.outDim ...... changed to be a bit more robust
+        visual_dim = getattr(self.visual, "outDim", getattr(self.visual, "out_dim", 768)) 
+               
         #text branch
         self.text_encoder = HuggingfaceTextEncoder(name = text_encoder_name, pretrained=True)
         
