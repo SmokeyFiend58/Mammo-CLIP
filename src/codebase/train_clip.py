@@ -18,6 +18,7 @@ from transformers import AutoTokenizer
 from utils import seed_all
 from breastclip.data.data_utils import get_density_augmentation
 from breastclip.model.mammo_clip import MammoCLIP
+from breastclip.model.losses import OrdinalRegressionLoss, GaussianUncertaintyLoss, CentreLoss
 
 class CLIPLoss(nn.Module):
     def __init__(self):
@@ -63,6 +64,11 @@ class MammoCLIPDataset(Dataset):
         self.split_group = split_group
         self.max_len = max_len
         self.rare_densities = ['A', 'B', 'D']
+        self.density_map = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
+        self.birads_map = {1: 0, 2: 1, 3: 2, 4: 3, 5: 4}
+        self.percent_map = {'A': 0.1, 'B': 0.4, 'C': 0.7, 'D': 0.9}
+        
+    ### needs completing, dont really know how to implement the scientific annotations/notes ####    
     def prompt_generate(self, row):
             #clean density
         densityUnclean = row.get('breast_density', 'Unknown')
@@ -139,7 +145,18 @@ class MammoCLIPDataset(Dataset):
         inputIDs = tokens['input_ids'].squeeze(0)
         attentionMask = tokens['attention_mask'].squeeze(0)
         
-        return image_tensor, inputIDs, attentionMask
+        birads_value = row.get('breast_birads',1)
+        if isinstance(birads_value, str):
+            try: 
+                birads_value = int(birads_value.split(' ')[-1])
+            except: 
+                birads_value = 1
+        label_d_class = torch.tensor(self.density_map.get(densityChar, 2), dtype = torch.long)
+        label_d_percent = torch.tensor(self.percent_map.get(densityChar, 0.5), dtype= torch.float)
+        label_birads = torch.tensor(self.birads_map.get(birads_value, 0), dtype=torch.long)
+                
+        
+        return image_tensor, inputIDs, attentionMask, label_d_class, label_d_percent, label_birads
             
 def config():
     parser = argparse.ArgumentParser()
@@ -164,6 +181,12 @@ def config():
     parser.add_argument("--val-split", default=0.2, type=float)
 
     parser.add_argument("--num-workers", default=0, type=int) # Set 0 for Windows compatibility
+    #multi head classification stuffs
+    
+    parser.add_argument("--use-aux-heads", action="store_true", help= "Enabled 3-head architecture")
+    parser.add_argument("--use-center-loss", action="store_true", help="Enable Center Loss")    
+    parser.add_argument("--lr-cent", default=0.5, type=float, help="Learning rate for Center Loss")
+    parser.add_argument("--cent-weight", default=0.01, type=float, help="Weight for Center Loss")
     
     return parser.parse_args()
 def main(args):
@@ -233,12 +256,26 @@ def main(args):
     """
     
     #model
-    model = MammoCLIP(image_encoder_name= args.image_encoder, text_encoder_name=args.text_encoder, img_size=args.img_size, embed_dim=args.embed_dim).to(device)
+    model = MammoCLIP(image_encoder_name= args.image_encoder, text_encoder_name=args.text_encoder, img_size=args.img_size, embed_dim=args.embed_dim, use_aux_heads= args.use_aux_heads).to(device)
     
     
     #optimizer and loss
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    #optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     clip_loss_fn = CLIPLoss()
+    
+    loss_d_class = OrdinalRegressionLoss(num_classes=4)
+    loss_d_percent = GaussianUncertaintyLoss()
+    loss_birads = OrdinalRegressionLoss(num_classes=5)
+    
+    #centre loss needs raw visual dim
+    visual_dim = getattr(model.visual, "outDim", getattr(model.visual, "out_dim", 768))
+    loss_centre = CentreLoss(num_classes = 4, feat_dim = visual_dim, device = device)
+    
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    
+    #need a higher lr for centre loss
+    optimizer_centre = torch.optim.SGD(loss_centre.parameters(), lr = args.lr_cent)
+    
     
     #criteria_d = nn.CrossEntropyLoss()
     #criteria_b = nn.CrossEntropyLoss()
@@ -252,22 +289,42 @@ def main(args):
         train_loss = 0
         loop = tqdm(train_loader, desc="Training")
         
-        for image, input_ids, attention_mask in loop:
+        for image, input_ids, attention_mask, label_d_class, label_d_percent, label_birads in loop:
             image, input_ids, attention_mask = images.to(device), input_ids.to(device), attention_mask.to(device)
+            label_d_class, label_d_percent, label_birads = label_d_class.to(device), label_d_percent.to(device), label_birads.to(device)
             
             optimizer.zero_grad()
+            if args.use_centre_loss: 
+                optimizer.zero_grad()
             
             #####logits_d, logits_b = model(images)
             
+            if args.use_aux_heads:
+                out = model(image, {'input_ids': input_ids, 'attention_mask': attention_mask})
+                img_emb, text_emb, logit_scale = out[0], out[1], out[2]
+                raw_feats = out[3]
+                d_class, mu, log_var, b_out = out[4], out[5], out[6], out[7]
+            else:
+                #standard clip return, above is for the multi head stufs
+                img_emb, text_emb, logit_scale = model(image, {'input_ids': input_ids, 'attention_mask': attention_mask})
+
+                
             #forward pass: returns image embeds, text embeds and logit scale
-            img_emb, text_emb, logit_scale = model(image, {'input_ids': input_ids, 'attention_mask': attention_mask})
+            #img_emb, text_emb, logit_scale = model(image, {'input_ids': input_ids, 'attention_mask': attention_mask})
             
             
             
             #calc loss (calc short for calculate)
             loss = clip_loss_fn(img_emb, text_emb, logit_scale)
             
-            
+            if args.use_aux_heads:
+                loss += loss_d_class(d_class, label_d_class)
+                loss += loss_d_percent(mu, log_var, label_d_percent)
+                loss += loss_birads(b_out, label_birads)
+                
+                if args.use_centre_loss:
+                    loss += args.cent_weight * loss_centre(raw_feats, label_d_class)
+                
             
             ######loss_d = criteria_d(logits_d, labels_d)
             #######loss_b = criteria_b(logits_b, labels_b)
@@ -278,6 +335,12 @@ def main(args):
             loss.backward()
             optimizer.step()
             
+            #update centre
+            if args.use_aux_heads and args.use_centre_loss:
+                for param in loss_centre.parameters():
+                    param.grad.data *= (1. / args.cent_weight)
+                optimizer_centre.step()
+            
             train_loss += loss.item()
             loop.set_postfix(loss=loss.item())
             
@@ -287,14 +350,27 @@ def main(args):
         model.eval()
         
         val_loss = 0 
+        correct_d = 0
+        correct_b = 0
+        total_samples = 0
+        
+        ### progress bar for knowing if the validation is loading
+        val_loop = tqdm(valid_loader, desc = "Validating", leave = False)
+    
         
         with torch.no_grad():
-            for images, input_ids, attention_mask in valid_loader:
+            for images, input_ids, attention_mask, label_d_class, label_d_percent, label_birads in valid_loader:
                 images = images.to(device)
                 input_ids = input_ids.to(device)
                 attention_mask = attention_mask.to(device)
+                label_d_class = label_d_class.to(device)
+                label_birads = label_birads.to(device)
                 
-                img_emb, text_emb, logit_scale = model(image, {'input_ids': input_ids, 'attention_mask': attention_mask})
+                if args.use_aux_heads:
+                    
+                    img_emb, text_emb, logit_scale, d_logits, b_logits = model(image, {'input_ids': input_ids, 'attention_mask': attention_mask})
+                else:
+                    img_emb, text_emb, logit_scale = model(image, {'input_ids': input_ids, 'attention_mask': attention_mask})
 
                 loss = clip_loss_fn(img_emb, text_emb, logit_scale)
 
@@ -303,10 +379,29 @@ def main(args):
                 
                 val_loss += loss.item()
                 
+                #accuracy for latent sdpace partitioning
+                if args.use_aux_heads:
+                    #decode ordinal logic
+                    pred_d = (d_logits > 0).sum(dim=1)
+                    pred_b = (b_logits > 0).sum(dim=1)
+                    
+                    correct_d += (pred_d == label_d_class).sum().item()
+                    correct_b += (pred_b == label_birads).sum.item()
+                    total_samples += label_d_class.size(0)
+                    
+                
         avg_val_loss = val_loss / len(valid_loader)
         writer.add_scalar("Loss/Validation", avg_val_loss, epoch)
         
-        print(f"Avg Loss: {avg_train_loss:.4f}")
+        print(f"Avg Loss: {avg_train_loss:.4f}..... Avg Validation Loss: {avg_val_loss:.4f}")
+        
+        if args.use_aux_heads and total_samples>0:
+            acc_d = correct_d / total_samples
+            acc_b = correct_b / total_samples
+            print(f"Density Accuracy {acc_d:4f}..... BIRADS Accuracy: {acc_b:.4f}")
+            writer.add_scalar("Accuracy/Density", acc_d, epoch)
+            writer.add_scaler("Accuracy/BIRADS", acc_b, epoch)
+            
         
         #save every epoch to not lose progess
         torch.save(model.state_dict(), os.path.join(args.output_path, f"MammoCLIP_epoch_{epoch+1}.pth"))
