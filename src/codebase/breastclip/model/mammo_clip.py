@@ -8,9 +8,11 @@ from breastclip.model.modules.image_encoder import SwinTransformer_Mammo
 from breastclip.model.modules.text_encoder import HuggingfaceTextEncoder
 
 class MammoCLIP(nn.Module):
-    def __init__(self, image_encoder_name = "swin_tiny_patch4_window7_224", text_encoder_name = "emilyalsentzer/Bio_ClinicalBERT", img_size = 1344, embed_dim = 256,use_aux_heads = False): # aux heads are for activiating a novelty
+    def __init__(self, image_encoder_name = "swin_tiny_patch4_window7_224", text_encoder_name = "emilyalsentzer/Bio_ClinicalBERT", img_size = 1344, embed_dim = 256,use_aux_heads = False, use_uncertainty = False): # aux heads are for activiating a novelty
         super().__init__()
         self.use_aux_heads = use_aux_heads
+        self.use_uncertainty = use_uncertainty
+        
         
         
         #image branch
@@ -40,11 +42,18 @@ class MammoCLIP(nn.Module):
             #Head A: density class (ordinal: 4 classes -> 3 thresholds)
             self.head_density_class = nn.Linear(visual_dim, 3)
             
+            d_perc_out = 2 if self.use_uncertainty else 1
+            
+            
             #head b: density % (regression: mean and logVar)
             self.head_density_perc = nn.Linear(visual_dim, 2)
             
             #head c: BIRADS (ordinal: 5 classes -> 4 thresholds)
             self.head_birads = nn.Linear(visual_dim, 4)
+            
+            #dropout for monte carlo sampling .......... epistemic uncertainty
+            self.dropout = nn.Dropout(p=0.2)
+            
             
         
         
@@ -58,33 +67,44 @@ class MammoCLIP(nn.Module):
         
         #text encoding 
         # text encoder returns batch, seq length, text_dim
-        text_ouputs = self.text_encoder(text_inputs)
-        
-        
-        
-        #pooling: take the first token CLS (index 0) to represent the sentence
-        text_features = text_ouputs[:, 0, :]
-        
-        # projection
         image_embeds = self.image_projection(images_features)
-        text_embeds = self.text_projection(text_features)
-        
-        #normalisation
-        # normalise vectors to length 1
         image_embeds = image_embeds / image_embeds.norm(dim=1, keepdim = True)
-        text_embeds = text_embeds / text_embeds.norm(dim = 1, keepdim = True)
+
         
+        text_embeds = None
+        if text_inputs is not None:
+            
+            text_ouputs = self.text_encoder(text_inputs)
+            #pooling: take the first token CLS (index 0) to represent the sentence
+            text_features = text_ouputs[:, 0, :]
+            # projection
+            text_embeds = self.text_projection(text_features)
+           
+            #normalisation
+            # normalise vectors to length 1
+            text_embeds = text_embeds / text_embeds.norm(dim = 1, keepdim = True)
+        
+        
+        
+     
+        aux_out = {}
         #auxlirary outputs!!
         if self.use_aux_heads:
-            d_class = self.head_density_class(images_features)
+            #applying dropout only if training or doing mc sampling
+            features_dropped = self.dropout(images_features) if self.use_uncertainty else images_features
+            aux_out['d_class'] = self.head_density_class(features_dropped)
+            aux_out['b_class'] = self.head_density_perc(features_dropped)
             
-            d_perc = self.head_density_perc(images_features)
-            mu, logVar = d_perc[:, 0], d_perc[:, 1]
+            d_percent_raw = self.head_density_perc(features_dropped)
+            if self.use_uncertainty:
+                aux_out['d_percent_mu'] = d_percent_raw[:, 0]
+                aux_out['d_percent_logvar'] = d_percent_raw[:, 1]
+            else: 
+                aux_out['d_percent_mu'] = d_percent_raw.squeeze()
+                aux_out['d_percent_logvar'] = None
             
-            b_out = self.head_birads(images_features)
             
             #return everything
-            return image_embeds, text_embeds, self.logit_scale.exp(), images_features, d_class, mu, logVar, b_out
+        return image_embeds, text_embeds, self.logit_scale.exp(), images_features, aux_out
         
-        return image_embeds, text_embeds, self.logit_scale.exp()
     
