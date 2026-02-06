@@ -19,7 +19,9 @@ from utils import seed_all
 from breastclip.data.data_utils import get_density_augmentation
 from breastclip.model.mammo_clip import MammoCLIP
 from breastclip.model.losses import OrdinalRegressionLoss, GaussianUncertaintyLoss, CentreLoss
-
+from breastclip.data import MammoCLIPDataset
+from breastclip.model.training.logger import ResultsLogger
+from breastclip.model.training import engine
 class CLIPLoss(nn.Module):
     def __init__(self):
         super().__init__()
@@ -55,109 +57,7 @@ class CLIPLoss(nn.Module):
         
         return (loss_i + loss_t) / 2
     
-class MammoCLIPDataset(Dataset):
-    def __init__(self, dataframe, img_dir, tokenizer, transform_dict = None, split_group = "train", max_len = 128):
-        self.data = dataframe.reset_index(drop = True)
-        self.img_dir = img_dir
-        self.tokenizer = tokenizer
-        self.transform_dict = transform_dict
-        self.split_group = split_group
-        self.max_len = max_len
-        self.rare_densities = ['A', 'B', 'D']
-        self.density_map = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
-        self.birads_map = {1: 0, 2: 1, 3: 2, 4: 3, 5: 4}
-        self.percent_map = {'A': 0.1, 'B': 0.4, 'C': 0.7, 'D': 0.9}
-        
-    ### needs completing, dont really know how to implement the scientific annotations/notes ####    
-    def prompt_generate(self, row):
-            #clean density
-        densityUnclean = row.get('breast_density', 'Unknown')
-        if isinstance(densityUnclean, str) and "Density" in densityUnclean:
-            density = densityUnclean.replace("Density ", "")
-        else:
-            density = densityUnclean
-            #BI-RADS cleaning
-            
-        biradsUnclean = row.get('breast_birads', 'Unknown')
-        if isinstance(biradsUnclean, str) and "BI-RADS" in biradsUnclean:
-            birads = biradsUnclean.replace("BI-RADS ", "")
-        else: 
-            birads = biradsUnclean
-            
-            #clean findings
-        findingString = row.get('finding_categories', "['No Finding']")
-        try:
-            findings_list = ast.literal_eval(findingString)
-            if len(findings_list == 0):
-                findingText = "No specific findings"
-            else:
-                findingsText = ", ".join(findings_list)
-        except:
-            findingsText = "No findings"
-            
-        text = f"{row.get('laterality', '')} {row.get('view_position', '')} mammogram. "\
-                f"Breast Density {density}. " \
-                f"BI-RADS {birads}. "\
-                f"Findings: {findingsText}."
-        return text
-    
-    def __len__(self):
-            return len(self.data)
-    
-    def __getitem__(self, idx):
-        row = self.data.iloc[idx]
-            
-            #load image in
-        imgID = f"{row['image_id']}.png"
-        studyFolder = row['study_id']
-        imgPath = os.path.join(self.img_dir, studyFolder, imgID)
-        if not os.path.exists(imgPath):
-            imgPath = os.path.join(self.img_dirm, imgID)
-        
-        image = Image.open(imgPath).convert("RGB")
-        image_np = np.array(image)
-        
-        density_val = row.get('breast_density', 'C')
-        if isinstance(density_val, str) and len(density_val) > 1:
-            densityChar = density_val[-1]
-        else: 
-            densityChar = 'C'
-        
-        selected_transform = None
-        
-        if self.split_group == 'valid':
-            selected_transform = self.transform_dict['valid']
-        else:
-            if densityChar in self.rare_densities:
-                selected_transform = self.transform_dict['rare']
-            else:
-                selected_transform = self.transform_dict['common']
-                
-        if selected_transform:
-            augmented = selected_transform(image = image_np)
-            image_tensor = augmented["image"]
-        
-        text_prompt = self.prompt_generate(row)
-        tokens = self.tokenizer(text_prompt, padding = "max_length", truncation = True, max_length = self.max_len, return_tensors= "pt")
-        
-        
-        #squeeze to remove batch dimensions (1,128) goes to 128 
-        inputIDs = tokens['input_ids'].squeeze(0)
-        attentionMask = tokens['attention_mask'].squeeze(0)
-        
-        birads_value = row.get('breast_birads',1)
-        if isinstance(birads_value, str):
-            try: 
-                birads_value = int(birads_value.split(' ')[-1])
-            except: 
-                birads_value = 1
-        label_d_class = torch.tensor(self.density_map.get(densityChar, 2), dtype = torch.long)
-        label_d_percent = torch.tensor(self.percent_map.get(densityChar, 0.5), dtype= torch.float)
-        label_birads = torch.tensor(self.birads_map.get(birads_value, 0), dtype=torch.long)
-                
-        
-        return image_tensor, inputIDs, attentionMask, label_d_class, label_d_percent, label_birads
-            
+    #removed MammoCLIPdataset
 def config():
     parser = argparse.ArgumentParser()
     # Paths
@@ -184,20 +84,67 @@ def config():
     #multi head classification stuffs
     
     parser.add_argument("--use-aux-heads", action="store_true", help= "Enabled 3-head architecture")
-    parser.add_argument("--use-center-loss", action="store_true", help="Enable Center Loss")    
+    parser.add_argument("--use-centre-loss", action="store_true", help="Enable Center Loss")
+    parser.add_argument("--use-uncertainty", action="store_true", help="Enable Aleatoric/Epistemic Uncertainty")
     parser.add_argument("--lr-cent", default=0.5, type=float, help="Learning rate for Center Loss")
     parser.add_argument("--cent-weight", default=0.01, type=float, help="Weight for Center Loss")
     
     return parser.parse_args()
+
+def train_one_epoch(model, loader, optimizer, optim_centre, device, args, loss_fns):
+    model.train()
+    total_loss = 0
+    
+    for batch in loader:
+        img, inp, mask, labelD, labelDp, labelB = batch
+        img, inp, mask = img.to(device), inp.to(device), mask.to(device)
+        labelD, labelDp, labelB = labelD.to(device), labelDp.to(device), labelB.to(device)
+        
+        optimizer.zero_grad()
+        
+        if args.use_centre_loss:
+            optim_centre.zero_grad()
+        
+        #forward pass
+        img_emb, text_emb, scale, raw_feats, aux_out = model(img, {'input_ids': inp, 'attention_mask': mask})
+        
+        #main loss (clip)
+        loss = loss_fns['clip'](img_emb, text_emb, scale)
+        
+        #novelty losses
+        if args.use_aux_heads:
+            loss += loss_fns['ord_d'](aux_out['d_class'], labelD)
+            loss += loss_fns['ord_b'](aux_out['b_class'], labelB)
+            
+            if args.use_uncertainty:
+                loss += loss_fns['gauss'](aux_out['d_perc_mu'], aux_out['d_perc_logvar'], labelDp)
+            else:
+                #mse is no uncertainty loss
+                loss += nn.MSELoss()(aux_out['d_perc_mu'], labelDp.float())
+
+        if args.use_centre_loss:
+            loss += 0.01 * loss_fns['centre'](raw_feats, labelD)
+        
+        
+        loss.backward()
+        optimizer.step()
+        if args.use_centre_loss: 
+            optim_centre.step()
+        total_loss += loss.item()
+        
+    return total_loss / len(loader)
+
+                    
+    
+
 def main(args):
     #taken from train_grading with slight modifications
     seed_all(args.seed)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Starting Training on: {device}")
     
-    #output setup
-    os.makedirs(args.output_path, exist_ok= True)
-    writer = SummaryWriter(log_dir = os.path.join(args.output_path, "logs"))
+    logger = ResultsLogger(args.output_path)
+    
     
     #load all data
     full_dataFrame = pd.read_csv(args.csv_file)
@@ -258,155 +205,35 @@ def main(args):
     #model
     model = MammoCLIP(image_encoder_name= args.image_encoder, text_encoder_name=args.text_encoder, img_size=args.img_size, embed_dim=args.embed_dim, use_aux_heads= args.use_aux_heads).to(device)
     
-    
-    #optimizer and loss
-    #optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    clip_loss_fn = CLIPLoss()
-    
-    loss_d_class = OrdinalRegressionLoss(num_classes=4)
-    loss_d_percent = GaussianUncertaintyLoss()
-    loss_birads = OrdinalRegressionLoss(num_classes=5)
-    
-    #centre loss needs raw visual dim
-    visual_dim = getattr(model.visual, "outDim", getattr(model.visual, "out_dim", 768))
-    loss_centre = CentreLoss(num_classes = 4, feat_dim = visual_dim, device = device)
-    
+    #Loss setup to fit with logger
+    loss_fns = {'clip': CLIPLoss()}
+    if args.use_aux_heads:
+        loss_fns['ord_d'] = OrdinalRegressionLoss(num_classes=4)
+        loss_fns['ord_b'] = OrdinalRegressionLoss(num_classes=5)
+        loss_fns['gauss'] = GaussianUncertaintyLoss()
+        
+    if args.use_centre_loss:
+        visual_dim = getattr(model.visual, "outDim", getattr(model.visual, "out_dim", 768))
+        loss_fns['centre'] = CentreLoss(num_classes = 4, feat_dim = visual_dim, device = device)
+        optim_centre = torch.optim.SGD(loss_fns['centre'].parameters(), lr = args.lr_cent)
+    else:
+        optim_centre = None
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    
-    #need a higher lr for centre loss
-    optimizer_centre = torch.optim.SGD(loss_centre.parameters(), lr = args.lr_cent)
-    
-    
-    #criteria_d = nn.CrossEntropyLoss()
-    #criteria_b = nn.CrossEntropyLoss()
-    
-    #training loop
+
     
     for epoch in range(args.epochs):
-        print(f"\nEpoch {epoch}/{args.epochs}")
         
-        model.train()
-        train_loss = 0
-        loop = tqdm(train_loader, desc="Training")
+        train_loss = train_one_epoch(model, train_loader, optimizer, optim_centre, device, args, loss_fns)
         
-        for image, input_ids, attention_mask, label_d_class, label_d_percent, label_birads in loop:
-            image, input_ids, attention_mask = images.to(device), input_ids.to(device), attention_mask.to(device)
-            label_d_class, label_d_percent, label_birads = label_d_class.to(device), label_d_percent.to(device), label_birads.to(device)
-            
-            optimizer.zero_grad()
-            if args.use_centre_loss: 
-                optimizer.zero_grad()
-            
-            #####logits_d, logits_b = model(images)
-            
-            if args.use_aux_heads:
-                out = model(image, {'input_ids': input_ids, 'attention_mask': attention_mask})
-                img_emb, text_emb, logit_scale = out[0], out[1], out[2]
-                raw_feats = out[3]
-                d_class, mu, log_var, b_out = out[4], out[5], out[6], out[7]
-            else:
-                #standard clip return, above is for the multi head stufs
-                img_emb, text_emb, logit_scale = model(image, {'input_ids': input_ids, 'attention_mask': attention_mask})
-
-                
-            #forward pass: returns image embeds, text embeds and logit scale
-            #img_emb, text_emb, logit_scale = model(image, {'input_ids': input_ids, 'attention_mask': attention_mask})
-            
-            
-            
-            #calc loss (calc short for calculate)
-            loss = clip_loss_fn(img_emb, text_emb, logit_scale)
-            
-            if args.use_aux_heads:
-                loss += loss_d_class(d_class, label_d_class)
-                loss += loss_d_percent(mu, log_var, label_d_percent)
-                loss += loss_birads(b_out, label_birads)
-                
-                if args.use_centre_loss:
-                    loss += args.cent_weight * loss_centre(raw_feats, label_d_class)
-                
-            
-            ######loss_d = criteria_d(logits_d, labels_d)
-            #######loss_b = criteria_b(logits_b, labels_b)
-            
-            #######loss = loss_b +loss_d
-            
-            #back pass
-            loss.backward()
-            optimizer.step()
-            
-            #update centre
-            if args.use_aux_heads and args.use_centre_loss:
-                for param in loss_centre.parameters():
-                    param.grad.data *= (1. / args.cent_weight)
-                optimizer_centre.step()
-            
-            train_loss += loss.item()
-            loop.set_postfix(loss=loss.item())
-            
-        avg_train_loss = train_loss / len(train_loader)
-        writer.add_scalar("Loss/Train", avg_train_loss, epoch)
+        print(f"Epoch {epoch}: Train Loss {train_loss: .5f}")
         
-        model.eval()
+        logger.log_epoch(epoch, {'train_loss': train_loss})
         
-        val_loss = 0 
-        correct_d = 0
-        correct_b = 0
-        total_samples = 0
-        
-        ### progress bar for knowing if the validation is loading
-        val_loop = tqdm(valid_loader, desc = "Validating", leave = False)
+    logger.saveFinalResult(args, {'final_train_loss': train_loss})
     
         
-        with torch.no_grad():
-            for images, input_ids, attention_mask, label_d_class, label_d_percent, label_birads in valid_loader:
-                images = images.to(device)
-                input_ids = input_ids.to(device)
-                attention_mask = attention_mask.to(device)
-                label_d_class = label_d_class.to(device)
-                label_birads = label_birads.to(device)
-                
-                if args.use_aux_heads:
-                    
-                    img_emb, text_emb, logit_scale, d_logits, b_logits = model(image, {'input_ids': input_ids, 'attention_mask': attention_mask})
-                else:
-                    img_emb, text_emb, logit_scale = model(image, {'input_ids': input_ids, 'attention_mask': attention_mask})
-
-                loss = clip_loss_fn(img_emb, text_emb, logit_scale)
-
-                ####loss_d = criteria_d(logits_d, labels_d)
-                ####loss_b = criteria_b(logits_b, labels_b)
-                
-                val_loss += loss.item()
-                
-                #accuracy for latent sdpace partitioning
-                if args.use_aux_heads:
-                    #decode ordinal logic
-                    pred_d = (d_logits > 0).sum(dim=1)
-                    pred_b = (b_logits > 0).sum(dim=1)
-                    
-                    correct_d += (pred_d == label_d_class).sum().item()
-                    correct_b += (pred_b == label_birads).sum.item()
-                    total_samples += label_d_class.size(0)
-                    
-                
-        avg_val_loss = val_loss / len(valid_loader)
-        writer.add_scalar("Loss/Validation", avg_val_loss, epoch)
         
-        print(f"Avg Loss: {avg_train_loss:.4f}..... Avg Validation Loss: {avg_val_loss:.4f}")
-        
-        if args.use_aux_heads and total_samples>0:
-            acc_d = correct_d / total_samples
-            acc_b = correct_b / total_samples
-            print(f"Density Accuracy {acc_d:4f}..... BIRADS Accuracy: {acc_b:.4f}")
-            writer.add_scalar("Accuracy/Density", acc_d, epoch)
-            writer.add_scaler("Accuracy/BIRADS", acc_b, epoch)
-            
-        
-        #save every epoch to not lose progess
-        torch.save(model.state_dict(), os.path.join(args.output_path, f"MammoCLIP_epoch_{epoch+1}.pth"))
-    print("Training Complete")
-    writer.close()
     
 if __name__ == "__main__":
     args = config()
