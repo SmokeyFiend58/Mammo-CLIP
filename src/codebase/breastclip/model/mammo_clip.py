@@ -46,7 +46,7 @@ class MammoCLIP(nn.Module):
             
             
             #head b: density % (regression: mean and logVar)
-            self.head_density_perc = nn.Linear(visual_dim, 2)
+            self.head_density_perc = nn.Linear(visual_dim, d_perc_out)
             
             #head c: BIRADS (ordinal: 5 classes -> 4 thresholds)
             self.head_birads = nn.Linear(visual_dim, 4)
@@ -93,7 +93,7 @@ class MammoCLIP(nn.Module):
             #applying dropout only if training or doing mc sampling
             features_dropped = self.dropout(images_features) if self.use_uncertainty else images_features
             aux_out['d_class'] = self.head_density_class(features_dropped)
-            aux_out['b_class'] = self.head_density_perc(features_dropped)
+            aux_out['b_class'] = self.head_birads(features_dropped)
             
             d_percent_raw = self.head_density_perc(features_dropped)
             if self.use_uncertainty:
