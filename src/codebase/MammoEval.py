@@ -1,0 +1,148 @@
+# this is the test loop and should calc various difference accuracies aswell
+
+import logging
+import os
+import torch
+import torch.nn.functional as F
+import numpy as np
+from tqdm import tqdm
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, confusion_matrix
+
+log = logging.getLogger(__name__)
+
+class MammoEval:
+    def __init__(self, model, dataloader, device, output_path):
+        self.model = model
+        self.dataloader = dataloader
+        self.device = device
+        self.out_path = output_path
+        
+        os.makedirs(self.out_path, exists_ok = True)
+    
+    def decodeOrdinal(self, logits):
+        #converts ordinal logits(batch, num_classes-1) into class labels
+        # sigmoid restricts logits to 0-1 range (prob of crossing threshold into another classs)
+        probs = torch.sigmoid(logits)
+        #sum number of thresholds gives the class index (0 - n)
+        pred_labels = (probs > 0.5).sum(dim=1)
+        
+        return pred_labels, probs
+
+    def calcECE(self, preds, labels, n_bins = 10):
+        #expected calibration error
+        # checks if a 90% confidence is a 90% accuracy
+        bin_boundaries = torch.linspace(0,1,n_bins +1)
+        ece = 0.0
+        
+    ########        #if preds are logics/class indices we need confidence scores
+    ####assuming preds passed here are the max probabilities for the chosen class    
+        confidences = preds
+        accuracies = (preds  == labels)# placeholder needs raw probs 
+    ####correct loigic in the main loop handles preparation
+        return 0.0
+    
+    def enable_Dropout(self, m):
+        if type(m) == torch.nn.Dropout:
+            m.train()
+    def evalMetrics(self):
+        self.model.eval()
+        
+        all_labels_density = [] #ground trush labels 
+        all_labels_birads = []
+        
+        all_preds_density = [] #class predictions
+        all_preds_birads = []
+        
+        all_probs_density = [] #density probabilities
+        all_aleatoric = [] # density % variance
+        
+        print("Running eval")
+        with torch.no_grad():
+            for batch in tqdm(self.dataloader):
+                #unpack batch 
+                #adjust batch unpacking depending if loader returns a dict or tuple
+                if isinstance(batch, dict):
+                    img = batch['image'].to(self.device)
+                    input_ids = batch[input_ids].to(self.device)
+                    attention_mask = batch['attention_mask'].to(self.device)
+                    labels_density = batch['labels_d'].to(self.device)
+                    labels_birads = batch['labels_b'].to(self.device)
+                else:
+                    #if using train_grading as this returns typle
+                    img, labels_density, labels_birads = batch
+                    img, labels_density, labels_birads = img.to(self.device), labels_density.to(self.device), labels_birads.to(self.device)
+                    input_ids, attention_mask = None, None
+                    
+                #forward pass
+                #need the aux out dict from mammo_clip
+                
+                _,_,_,_,aux_out = self.model(img, {'input_ids': input_ids, 'attention_mask':attention_mask}if input_ids is not None else None)
+                
+                
+                #density decoding
+                #ordinal decoding for density class
+                d_logits = aux_out['d_class']
+                pred_density_class, d_probs_raw = self.decodeOrdinal(d_logits)
+                
+                #Birads decoding
+                #oridnal deocidng for BIRADS
+                b_logits = aux_out['b_class']
+                pred_birads_class = self.decodeOrdinal(b_logits)
+                
+                
+                #aleatoric uncertainty
+                #use exp() because model outputs log_variance
+                
+                if 'd_percent_logvar' in aux_out and aux_out['d_percent_logvar'] is not None:
+                    aleatoric = torch.exp(aux_out['d_percent_logvar'])
+                    all_aleatoric.extend(aleatoric.cpu().numpy())
+                
+                
+                all_labels_density.extend(labels_density.cpu().numpy())
+                all_labels_birads.extend(labels_birads.cpu().numpy())
+                
+                all_preds_density.extend(pred_density_class.cpu().numpy())
+                all_preds_birads.extend(pred_birads_class.cpu().numpy())
+                
+                #auroc needs standard probability distribution
+                #ordinal outputs are thresholds, we approx class prob
+                #take mean of the sigmoid ouytputs (simpliified for AUROC)
+                all_probs_density.extend(torch.sigmoid(d_logits).mean(dim=1).cpu().numpy())
+        
+        
+        #metric calculation
+        
+        #marcof1 and accuracy, macro average treats all classes equally
+        f1_density = f1_score(all_labels_density, all_preds_density, average='macro')
+        acc_density = accuracy_score(all_labels_density, all_preds_density)
+        
+        f1_birads = f1_score(all_labels_birads, all_preds_birads, average='macro')
+        acc_birads = accuracy_score(all_labels_birads, all_preds_birads)
+        
+        # one vs rest auroc
+        try: 
+            auroc_density = roc_auc_score(all_labels_density, all_probs_density, multi_class='ovr')
+        except:
+            auroc_density = 0.0 #fallbackl for if only 1 class present in batch
+        
+        print(f"Density --- F1 (macro): {f1_density:.4f} --- Accuracy: {acc_density:.4f} --- AUROC: {auroc_density:.4f}\n")
+        
+        print(f"BIRADS --- F1 (macro): {f1_birads:.4f} --- Accuracy: {acc_birads:.4f}")
+        
+        #per class sensitivity 
+        #confusion matrix
+        
+        confusion_matrix_density = confusion_matrix(all_labels_density, all_preds_density)
+        print("\n Density Confusion Matirx: \n", confusion_matrix_density)
+        
+        return {"f1_density": f1_density, "f1_birads": f1_birads, "aleatoric": np.mea(all_aleatoric)if all_aleatoric else 0}
+    
+    def evalUncertaintyMCDROPOUT(self, mc_samples = 10):
+        
+                
+                
+
+        
+
+        
+        
