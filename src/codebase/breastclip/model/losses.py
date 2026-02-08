@@ -55,7 +55,7 @@ class CentreLoss(nn.Module):
         self.device = device
         
         #lernable parameter(different from the model weights) 
-        self.centres == nn.Parameter(torch.randn(num_classes, feat_dim).to(device))
+        self.centres = nn.Parameter(torch.randn(num_classes, feat_dim).to(device))
         
     def forward(self, features, labels):
         batch_size = features.size(0)
