@@ -138,6 +138,45 @@ class MammoEval:
         return {"f1_density": f1_density, "f1_birads": f1_birads, "aleatoric": np.mea(all_aleatoric)if all_aleatoric else 0}
     
     def evalUncertaintyMCDROPOUT(self, mc_samples = 10):
+        self.model.eval()
+        
+        #force dropout layers to stay active during eval
+        self.model.apply(self.enable_Dropout)
+        
+        epistemic_uncertainty = []
+        
+        with torch.no_grad():
+            for batch in tqdm(self.dataloader):
+                if isinstance(batch, dict):
+                    img = batch['image'].to(self.device)
+                    #dont need text 
+                else:
+                    img, _, _ = batch
+                    img = img.to(self.device)
+                    
+                batch_predict = []
+                
+                #mc loop, predict N times for this batch
+                for _ in range(mc_samples):
+                    _,_,_,_, aux_out = self.model(img, None)
+                    
+                    logits = aux_out["d_class"]
+                    
+                    probs = torch.sigmoid(logits) # normalize
+                    batch_predict.append(probs.unsqueeze(0)) #shape = 1, batch, classes-1
+                    
+                # stack: samples, batch, classes-1
+                batch_predict = torch.cat(batch_predict, dim=0)
+                
+                #calc variance across sample dimension (dim = 0)
+                #high variances means the model is very uncertain
+                variance = batch_predict.var(dim=0).mean(dim=1) # average variance across classes
+                epistemic_uncertainty.extend(variance.cpu().numpy())
+            average_epistemic = np.mean(epistemic_uncertainty)
+            print(f"Average Epistemic Uncertainty: {average_epistemic:.5f}")
+            return average_epistemic
+        
+                    
         
                 
                 
