@@ -7,6 +7,9 @@ import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, confusion_matrix
+from breastclip.model.mammo_clip import MammoCLIP
+from train_grading import MultiHeadSwin
+
 
 log = logging.getLogger(__name__)
 
@@ -75,13 +78,14 @@ class MammoEval:
                 
                 try: 
                     #attempt to do VLM
-                    if input_ids is not None:
+                    if isinstance(self.model, MammoCLIP):
+                        
                         
                     
                 #forward pass
                 #need the aux out dict from mammo_clip
-                
-                        _,_,_,_,aux_out = self.model(img, {'input_ids': input_ids, 'attention_mask':attention_mask}if input_ids is not None else None)
+
+                        _,_,_,_,aux_out = self.model(img, {'input_ids': input_ids, 'attention_mask':attention_mask})
                         d_logits = aux_out['d_class']
                         b_logits = aux_out['b_class']
                         
@@ -181,10 +185,20 @@ class MammoEval:
                 
                 #mc loop, predict N times for this batch
                 for _ in range(mc_samples):
-                    _,_,_,_, aux_out = self.model(img, None)
+                    #handle both model types
+                
+                    output = self.model(img, None) if isinstance(self.model, MammoCLIP) else self.model(img)
                     
-                    logits = aux_out["d_class"]
+                    if isinstance(output, tuple) and len(output) ==5:
+                        aux_out = output[4]
+                        
                     
+                        logits = aux_out["d_class"]
+                    elif isinstance(output, tuple) and len(output) ==2:
+                        # this is image only
+                        logits = output[0]
+                        
+                        
                     probs = torch.sigmoid(logits) # normalize
                     batch_predict.append(probs.unsqueeze(0)) #shape = 1, batch, classes-1
                     
