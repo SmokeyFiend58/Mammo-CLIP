@@ -71,32 +71,48 @@ class MammoEval:
                     #if using train_grading as this returns typle
                     img, labels_density, labels_birads = batch
                     img, labels_density, labels_birads = img.to(self.device), labels_density.to(self.device), labels_birads.to(self.device)
-                    input_ids, attention_mask = None, None
+                    input_ids = None # slight change to make it work with train_grading
+                
+                try: 
+                    #attempt to do VLM
+                    if input_ids is not None:
+                        
                     
                 #forward pass
                 #need the aux out dict from mammo_clip
                 
-                _,_,_,_,aux_out = self.model(img, {'input_ids': input_ids, 'attention_mask':attention_mask}if input_ids is not None else None)
+                        _,_,_,_,aux_out = self.model(img, {'input_ids': input_ids, 'attention_mask':attention_mask}if input_ids is not None else None)
+                        d_logits = aux_out['d_class']
+                        b_logits = aux_out['b_class']
+                        
+                        if 'd_percent_logvar' in aux_out and aux_out['d_percent_logvar'] is not None:
+                            aleatoric = torch.exp(aux_out['d_percent_logvar'])
+                            all_aleatoric.extend(aleatoric.cpu().numpy())
+                    else:
+                        #fallback for image only
+                        d_logits, b_logits = self.model(img)
+                except RuntimeError as e:
+                    print(f"Forward pass error: {e}")
+                    continue
+                
                 
                 
                 #density decoding
                 #ordinal decoding for density class
-                d_logits = aux_out['d_class']
-                pred_density_class, d_probs_raw = self.decodeOrdinal(d_logits)
-                
+                if d_logits.shape[1] > 1:
+                    pred_density_class, d_probs_raw = self.decodeOrdinal(d_logits)
+                    all_probs_density.extend(torch.sigmoid(d_logits).mean(dim=1).cpu().numpy())
+                else:
+                    #regression MSE case 
+                    pred_density_class = torch.round(d_logits).calmp(0,3)
+                    all_probs_density.extend(torch.sigmoid(d_logits).mean(dim=1).cpu().numpy())
+
                 #Birads decoding
                 #oridnal deocidng for BIRADS
-                b_logits = aux_out['b_class']
-                pred_birads_class = self.decodeOrdinal(b_logits)
-                
-                
-                #aleatoric uncertainty
-                #use exp() because model outputs log_variance
-                
-                if 'd_percent_logvar' in aux_out and aux_out['d_percent_logvar'] is not None:
-                    aleatoric = torch.exp(aux_out['d_percent_logvar'])
-                    all_aleatoric.extend(aleatoric.cpu().numpy())
-                
+                if b_logits.shape[1] > 1:
+                    pred_birads_class = self.decodeOrdinal(b_logits)
+                else:
+                    pred_birads_class = torch.round(b_logits).clamp(0, 4)
                 
                 all_labels_density.extend(labels_density.cpu().numpy())
                 all_labels_birads.extend(labels_birads.cpu().numpy())
@@ -104,10 +120,17 @@ class MammoEval:
                 all_preds_density.extend(pred_density_class.cpu().numpy())
                 all_preds_birads.extend(pred_birads_class.cpu().numpy())
                 
+                
+                #aleatoric uncertainty
+                #use exp() because model outputs log_variance
+                
+                    
+                
+                
+                
                 #auroc needs standard probability distribution
                 #ordinal outputs are thresholds, we approx class prob
                 #take mean of the sigmoid ouytputs (simpliified for AUROC)
-                all_probs_density.extend(torch.sigmoid(d_logits).mean(dim=1).cpu().numpy())
         
         
         #metric calculation
