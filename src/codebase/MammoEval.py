@@ -63,7 +63,7 @@ class MammoEval:
                 #adjust batch unpacking depending if loader returns a dict or tuple
                 if isinstance(batch, dict):
                     img = batch['image'].to(self.device)
-                    input_ids = batch[input_ids].to(self.device)
+                    input_ids = batch['input_ids'].to(self.device)
                     attention_mask = batch['attention_mask'].to(self.device)
                     labels_density = batch['labels_d'].to(self.device)
                     labels_birads = batch['labels_b'].to(self.device)
@@ -104,7 +104,7 @@ class MammoEval:
                     all_probs_density.extend(torch.sigmoid(d_logits).mean(dim=1).cpu().numpy())
                 else:
                     #regression MSE case 
-                    pred_density_class = torch.round(d_logits).calmp(0,3)
+                    pred_density_class = torch.round(d_logits).clamp(0,3)
                     all_probs_density.extend(torch.sigmoid(d_logits).mean(dim=1).cpu().numpy())
 
                 #Birads decoding
@@ -158,7 +158,7 @@ class MammoEval:
         confusion_matrix_density = confusion_matrix(all_labels_density, all_preds_density)
         print("\n Density Confusion Matirx: \n", confusion_matrix_density)
         
-        return {"f1_density": f1_density, "f1_birads": f1_birads, "aleatoric": np.mea(all_aleatoric)if all_aleatoric else 0}
+        return {"f1_density": f1_density, "f1_birads": f1_birads, "aleatoric": np.mean(all_aleatoric)if all_aleatoric else 0}
     
     def evalUncertaintyMCDROPOUT(self, mc_samples = 10):
         self.model.eval()
