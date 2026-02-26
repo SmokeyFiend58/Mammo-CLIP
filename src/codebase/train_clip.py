@@ -15,13 +15,13 @@ from torch.utils.data import DataLoader, Dataset
 from sklearn.model_selection import train_test_split
 from torch.utils.tensorboard import SummaryWriter
 from transformers import AutoTokenizer
-from utils import seed_all
-from breastclip.data.data_utils import get_density_augmentation
-from breastclip.model.mammo_clip import MammoCLIP
-from breastclip.model.losses import OrdinalRegressionLoss, GaussianUncertaintyLoss, CentreLoss
-from breastclip.data import MammoCLIPDataset
-from breastclip.model.training.logger import ResultsLogger
-from breastclip.model.training import engine
+from src.codebase.utils import seed_all
+from src.codebase.breastclip.data.data_utils import get_density_augmentation
+from src.codebase.breastclip.model.mammo_clip import MammoCLIP
+from src.codebase.breastclip.model.losses import OrdinalRegressionLoss, GaussianUncertaintyLoss, CentreLoss
+from src.codebase.breastclip.data.MammoCLIPDataset import MammoCLIPDataset
+from src.codebase.breastclip.model.training.logger import ResultsLogger
+
 class CLIPLoss(nn.Module):
     def __init__(self):
         super().__init__()
@@ -67,7 +67,8 @@ def config():
     
     # Model
     parser.add_argument("--image-encoder", default= "swin_tiny_patch4_window7_224",type=str)
-    parser.add_argument("--text-encoder", default="emilyalsentzer/Bio_ClinicalBERT", type=str)
+    #parser.add_argument("--text-encoder", default="emilyalsentzer/Bio_ClinicalBERT", type=str)
+    parser.add_argument("--text-encoder", default="fixed_clinicalbert", type=str)
     
     parser.add_argument("--img-size", default=1344, type=int)   
     parser.add_argument("--embed-dim", default=512, type=int)
@@ -91,7 +92,7 @@ def config():
     
     return parser.parse_args()
 
-def train_one_epoch(model, loader, optimizer, optim_centre, device, args, loss_fns):
+def train_one_epoch(model, loader, optimizer, optim_centre, device, args, loss_fns, scalar):
     model.train()
     total_loss = 0
     
@@ -104,33 +105,36 @@ def train_one_epoch(model, loader, optimizer, optim_centre, device, args, loss_f
         
         if args.use_centre_loss:
             optim_centre.zero_grad()
-        
+        with torch.amp.autocast('cuda'):
         #forward pass
-        img_emb, text_emb, scale, raw_feats, aux_out = model(img, {'input_ids': inp, 'attention_mask': mask})
+            img_emb, text_emb, scale, raw_feats, aux_out = model(img, {'input_ids': inp, 'attention_mask': mask})
         
         #main loss (clip)
-        loss = loss_fns['clip'](img_emb, text_emb, scale)
+            loss = loss_fns['clip'](img_emb, text_emb, scale)
         
         #novelty losses
-        if args.use_aux_heads:
-            loss += loss_fns['ord_d'](aux_out['d_class'], labelD)
-            loss += loss_fns['ord_b'](aux_out['b_class'], labelB)
+            if args.use_aux_heads:
+                loss += loss_fns['ord_d'](aux_out['d_class'], labelD)
+                loss += loss_fns['ord_b'](aux_out['b_class'], labelB)
             
-            if args.use_uncertainty:
-                loss += loss_fns['gauss'](aux_out['d_perc_mu'], aux_out['d_perc_logvar'], labelDp)
-            else:
+                if args.use_uncertainty:
+                    loss += loss_fns['gauss'](aux_out['d_perc_mu'], aux_out['d_perc_logvar'], labelDp)
+                else:
                 #mse is no uncertainty loss
-                loss += nn.MSELoss()(aux_out['d_perc_mu'], labelDp.float())
+                    loss += nn.MSELoss()(aux_out['d_perc_mu'], labelDp.float())
 
-        if args.use_centre_loss:
-            loss += 0.01 * loss_fns['centre'](raw_feats, labelD)
+            if args.use_centre_loss:
+                loss += 0.01 * loss_fns['centre'](raw_feats, labelD)
         
-        
-        loss.backward()
-        optimizer.step()
+        scalar.scale(loss).backward()
+        #loss.backward()
+        #optimizer.step()
+        scalar.step(optimizer)
         if args.use_centre_loss: 
-            optim_centre.step()
+            scalar.step(optim_centre)
+        scalar.update()
         total_loss += loss.item()
+        
         
     return total_loss / len(loader)
 
@@ -221,10 +225,14 @@ def main(args):
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
+    scalar = torch.amp.GradScaler()
+    
+    
     
     for epoch in range(args.epochs):
         
-        train_loss = train_one_epoch(model, train_loader, optimizer, optim_centre, device, args, loss_fns)
+        train_loss = train_one_epoch(model, train_loader, optimizer, optim_centre, device, args, loss_fns, scalar)
+        
         
         print(f"Epoch {epoch}: Train Loss {train_loss: .5f}")
         

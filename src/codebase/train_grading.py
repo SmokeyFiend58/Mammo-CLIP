@@ -128,8 +128,8 @@ class VinDrSwinDataset(Dataset):
 def config():
     parser = argparse.ArgumentParser()
     # Paths
-    parser.add_argument("--csv-file", default=r"C:\Users\louis\Documents\TYP\finding_annotations.csv", type=str)
-    parser.add_argument("--img-dir", default=r"C:\Users\louis\Documents\TYP\GhoshData\vindr-mammo-ghosh-png\images_png", type=str)
+    parser.add_argument("--csv-file", default="/mnt/nfs/homes/robsonl1/Mammo-CLIP/Mammo-CLIP/DATAFILES/finding_annotations.csv", type=str)
+    parser.add_argument("--img-dir", default="/mnt/nfs/homes/robsonl1/Mammo-CLIP/Mammo-CLIP/DATAFILES/GhoshData/vindr-mammo-ghosh-png/images_png", type=str)
     parser.add_argument("--output_path", default="./output_swin", type=str)
     
     # Model
@@ -137,7 +137,7 @@ def config():
     parser.add_argument("--img-size", default=1344, type=int)
     
     # Training
-    parser.add_argument("--batch-size", default=2, type=int) # Low batch size for high res!
+    parser.add_argument("--batch-size", default=6, type=int) # Low batch size for high res!
     parser.add_argument("--epochs", default=20, type=int)
     parser.add_argument("--lr", default=1e-4, type=float)
     parser.add_argument("--seed", default=42, type=int)
@@ -228,6 +228,7 @@ def main(args):
     ###criteria_b = nn.CrossEntropyLoss()
     
     #training loop
+    scaler = torch.amp.GradScaler('cuda')
     
     for epoch in range(args.epochs):
         print(f"\nEpoch {epoch}/{args.epochs}")
@@ -240,19 +241,22 @@ def main(args):
             images, labels_d, labels_b = images.to(device), labels_d.to(device), labels_b.to(device)
             
             optimizer.zero_grad()
-            
-            logits_d, logits_b = model(images)
+            with torch.autocast(device_type = 'cuda', dtype=torch.float16):
+                logits_d, logits_b = model(images)
             
             #calc loss (calc short for calculate)
             
-            loss_d = criteria_d(logits_d, labels_d)
-            loss_b = criteria_b(logits_b, labels_b)
+                loss_d = criteria_d(logits_d, labels_d)
+                loss_b = criteria_b(logits_b, labels_b)
             
-            loss = loss_b +loss_d
+                loss = loss_b +loss_d
             
             #back pass
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            #loss.backward()
+            #optimizer.step()
+            scaler.update()
             
             train_loss += loss.item()
             loop.set_postfix(loss=loss.item())

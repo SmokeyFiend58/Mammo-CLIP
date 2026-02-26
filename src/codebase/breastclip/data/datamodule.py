@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Dict
 
 import pandas as pd
-from breastclip import util
+from src.codebase.breastclip import util
 from torch.utils.data import ConcatDataset, DataLoader
 
 # DDP
