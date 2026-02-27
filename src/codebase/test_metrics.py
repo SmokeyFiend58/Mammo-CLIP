@@ -1,11 +1,11 @@
 import torch
 from torch.utils.data import DataLoader
-from MammoEval import MammoEval
+from src.codebase.MammoEval import MammoEval
 from train_grading import VinDrSwinDataset, config
-from breastclip.model.mammo_clip import MammoCLIP
-from breastclip.data import data_utils
+from src.codebase.breastclip.model.mammo_clip import MammoCLIP
+from src.codebase.breastclip.data import data_utils
 import pandas as pd
-from train_grading import MultiHeadSwin
+from src.codebase.train_grading import MultiHeadSwin
 
 def testMain():
     args = config()

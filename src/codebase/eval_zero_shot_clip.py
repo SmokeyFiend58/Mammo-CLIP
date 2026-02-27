@@ -7,8 +7,8 @@ import pickle
 # from cxrclip.evaluator import Evaluator
 from omegaconf import DictConfig, OmegaConf
 
-from breastclip import seed_everything
-from breastclip.evaluator import Evaluator
+from src.codebase.breastclip import seed_everything
+from src.codebase.breastclip.evaluator import Evaluator
 
 log = logging.getLogger(__name__)
 

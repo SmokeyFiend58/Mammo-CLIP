@@ -61,8 +61,8 @@ class CLIPLoss(nn.Module):
 def config():
     parser = argparse.ArgumentParser()
     # Paths
-    parser.add_argument("--csv-file", default=r"C:\Users\louis\Documents\TYP\finding_annotations.csv", type=str)
-    parser.add_argument("--img-dir", default=r"C:\Users\louis\Documents\TYP\GhoshData\vindr-mammo-ghosh-png\images_png", type=str)
+    parser.add_argument("--csv-file", default="/mnt/nfs/homes/robsonl1/Mammo-CLIP/Mammo-CLIP/DATAFILES/finding_annotations.csv", type=str)
+    parser.add_argument("--img-dir", default="/mnt/nfs/homes/robsonl1/Mammo-CLIP/Mammo-CLIP/DATAFILES/GhoshData/vindr-mammo-ghosh-png/images_png", type=str)
     parser.add_argument("--output_path", default="./output_clip", type=str)
     
     # Model
@@ -75,7 +75,7 @@ def config():
     
 
     # Training
-    parser.add_argument("--batch-size", default=8, type=int) # Low batch size for high res!
+    parser.add_argument("--batch-size", default=2, type=int) # Low batch size for high res!
     parser.add_argument("--epochs", default=15, type=int)
     parser.add_argument("--lr", default=5e-5, type=float)
     parser.add_argument("--seed", default=42, type=int)
@@ -209,7 +209,9 @@ def main(args):
     
     #model
     model = MammoCLIP(image_encoder_name= args.image_encoder, text_encoder_name=args.text_encoder, img_size=args.img_size, embed_dim=args.embed_dim, use_aux_heads= args.use_aux_heads).to(device)
-    
+    for param in model.text_encoder.parameters():
+        param.requires_grad = False
+        
     #Loss setup to fit with logger
     loss_fns = {'clip': CLIPLoss()}
     if args.use_aux_heads:

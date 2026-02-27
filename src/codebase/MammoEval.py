@@ -7,8 +7,8 @@ import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, confusion_matrix
-from breastclip.model.mammo_clip import MammoCLIP
-from train_grading import MultiHeadSwin
+from src.codebase.breastclip.model.mammo_clip import MammoCLIP
+from src.codebase.train_grading import MultiHeadSwin
 
 
 log = logging.getLogger(__name__)

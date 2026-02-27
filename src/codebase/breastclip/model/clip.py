@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from transformers.tokenization_utils import PreTrainedTokenizer
 
-from .modules import load_image_encoder, load_projection_head, load_text_encoder
+from src.codebase.breastclip.model.modules import load_image_encoder, load_projection_head, load_text_encoder
 
 log = logging.getLogger(__name__)
 
