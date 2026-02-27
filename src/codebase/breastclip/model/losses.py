@@ -14,7 +14,8 @@ class OrdinalRegressionLoss(nn.Module):
         batchSize = logits.shape[0]
         
         #questions grid
-        labelSpace = torch.arange(self.num_classes -1, device= logits.device).expand(batchSize-1)
+        labelSpace = torch.arange(self.num_classes -1, device= logits.device).unsqueeze(0).expand(batchSize, self.num_classes - 1)
+        
         
         #expand targets
         targetsExpanded = targets.unsqueeze(1).expand(batchSize, self.num_classes -1)

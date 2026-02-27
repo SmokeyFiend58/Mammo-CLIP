@@ -118,10 +118,10 @@ def train_one_epoch(model, loader, optimizer, optim_centre, device, args, loss_f
                 loss += loss_fns['ord_b'](aux_out['b_class'], labelB)
             
                 if args.use_uncertainty:
-                    loss += loss_fns['gauss'](aux_out['d_perc_mu'], aux_out['d_perc_logvar'], labelDp)
+                    loss += loss_fns['gauss'](aux_out['d_percent_mu'], aux_out['d_perc_logvar'], labelDp)
                 else:
                 #mse is no uncertainty loss
-                    loss += nn.MSELoss()(aux_out['d_perc_mu'], labelDp.float())
+                    loss += nn.MSELoss()(aux_out['d_percent_mu'], labelDp.float())
 
             if args.use_centre_loss:
                 loss += 0.01 * loss_fns['centre'](raw_feats, labelD)
@@ -131,6 +131,7 @@ def train_one_epoch(model, loader, optimizer, optim_centre, device, args, loss_f
         #optimizer.step()
         scalar.step(optimizer)
         if args.use_centre_loss: 
+            scalar.unscale_(optim_centre)
             scalar.step(optim_centre)
         scalar.update()
         total_loss += loss.item()
