@@ -66,11 +66,11 @@ def config():
     parser.add_argument("--output_path", default="./output_clip", type=str)
     
     # Model
-    parser.add_argument("--image-encoder", default= "swin_tiny_patch4_window7_224",type=str)
+    parser.add_argument("--image-encoder", default= "swinv2_tiny_window8_256",type=str)
     #parser.add_argument("--text-encoder", default="emilyalsentzer/Bio_ClinicalBERT", type=str)
     parser.add_argument("--text-encoder", default="fixed_clinicalbert", type=str)
-    
-    parser.add_argument("--img-size", default=1344, type=int)   
+    #errors as partitions must be divisiable 128
+    parser.add_argument("--img-size", default=1280, type=int)   
     parser.add_argument("--embed-dim", default=512, type=int)
     
 
@@ -92,9 +92,12 @@ def config():
     
     return parser.parse_args()
 
-def train_one_epoch(model, loader, optimizer, optim_centre, device, args, loss_fns, scalar):
+def train_one_epoch(model, loader, optimizer, optim_centre, device, args, loss_fns, scalar, epoch):
     model.train()
     total_loss = 0
+    #progress bar added
+    loop = tqdm(loader, desc=f"Epoch{epoch}", leave=True)
+    
     
     for batch in loader:
         img, inp, mask, labelD, labelDp, labelB = batch
@@ -135,6 +138,7 @@ def train_one_epoch(model, loader, optimizer, optim_centre, device, args, loss_f
             scalar.step(optim_centre)
         scalar.update()
         total_loss += loss.item()
+        loop.set_postfix(loss=f"{loss.item():.4f}")
         
         
     return total_loss / len(loader)
@@ -234,7 +238,7 @@ def main(args):
     
     for epoch in range(args.epochs):
         
-        train_loss = train_one_epoch(model, train_loader, optimizer, optim_centre, device, args, loss_fns, scalar)
+        train_loss = train_one_epoch(model, train_loader, optimizer, optim_centre, device, args, loss_fns, scalar, epoch)
         
         
         print(f"Epoch {epoch}: Train Loss {train_loss: .5f}")

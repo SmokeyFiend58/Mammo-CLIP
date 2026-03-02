@@ -133,8 +133,8 @@ def config():
     parser.add_argument("--output_path", default="./output_swin", type=str)
     
     # Model
-    parser.add_argument("--arch", default="swin_tiny_patch4_window7_224", type=str)
-    parser.add_argument("--img-size", default=1344, type=int)
+    parser.add_argument("--arch", default="swinv2_tiny_window8_256", type=str)
+    parser.add_argument("--img-size", default=1280, type=int)
     
     # Training
     parser.add_argument("--batch-size", default=5, type=int) # Low batch size for high res! #6 is too large, 5 works 
