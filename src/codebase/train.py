@@ -5,7 +5,7 @@ import hydra
 import torch
 from omegaconf import DictConfig, OmegaConf
 
-from breastclip import convert_dictconfig_to_dict, run, run_ddp, seed_everything
+from src.codebase.breastclip import convert_dictconfig_to_dict, run, run_ddp, seed_everything
 
 log = logging.getLogger(__name__)
 

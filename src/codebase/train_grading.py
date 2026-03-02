@@ -12,12 +12,12 @@ from tqdm import tqdm
 from sklearn.metrics import f1_score, accuracy_score
 from torch.utils.tensorboard import SummaryWriter
 from sklearn.model_selection import train_test_split
-from utils import seed_all
-from breastclip.model.modules.image_encoder import SwinTransformer_Mammo
+from src.codebase.utils import seed_all
+from src.codebase.breastclip.model.modules.image_encoder import SwinTransformer_Mammo
 
-from breastclip.data.data_utils import load_transform
-from breastclip.data.data_utils import get_density_augmentation
-from breastclip.model.losses import OrdinalRegressionLoss, DensityMSELoss
+from src.codebase.breastclip.data.data_utils import load_transform
+from src.codebase.breastclip.data.data_utils import get_density_augmentation
+from src.codebase.breastclip.model.losses import OrdinalRegressionLoss, DensityMSELoss
 
 warnings.filterwarnings("ignore")
 
@@ -128,16 +128,16 @@ class VinDrSwinDataset(Dataset):
 def config():
     parser = argparse.ArgumentParser()
     # Paths
-    parser.add_argument("--csv-file", default=r"C:\Users\louis\Documents\TYP\finding_annotations.csv", type=str)
-    parser.add_argument("--img-dir", default=r"C:\Users\louis\Documents\TYP\GhoshData\vindr-mammo-ghosh-png\images_png", type=str)
+    parser.add_argument("--csv-file", default="/mnt/nfs/homes/robsonl1/Mammo-CLIP/Mammo-CLIP/DATAFILES/finding_annotations.csv", type=str)
+    parser.add_argument("--img-dir", default="/mnt/nfs/homes/robsonl1/Mammo-CLIP/Mammo-CLIP/DATAFILES/GhoshData/vindr-mammo-ghosh-png/images_png", type=str)
     parser.add_argument("--output_path", default="./output_swin", type=str)
     
     # Model
-    parser.add_argument("--arch", default="swin_tiny_patch4_window7_224", type=str)
-    parser.add_argument("--img-size", default=1344, type=int)
+    parser.add_argument("--arch", default="swinv2_tiny_window8_256", type=str)
+    parser.add_argument("--img-size", default=1280, type=int)
     
     # Training
-    parser.add_argument("--batch-size", default=2, type=int) # Low batch size for high res!
+    parser.add_argument("--batch-size", default=5, type=int) # Low batch size for high res! #6 is too large, 5 works 
     parser.add_argument("--epochs", default=20, type=int)
     parser.add_argument("--lr", default=1e-4, type=float)
     parser.add_argument("--seed", default=42, type=int)
@@ -228,6 +228,7 @@ def main(args):
     ###criteria_b = nn.CrossEntropyLoss()
     
     #training loop
+    scaler = torch.amp.GradScaler('cuda')
     
     for epoch in range(args.epochs):
         print(f"\nEpoch {epoch}/{args.epochs}")
@@ -240,19 +241,22 @@ def main(args):
             images, labels_d, labels_b = images.to(device), labels_d.to(device), labels_b.to(device)
             
             optimizer.zero_grad()
-            
-            logits_d, logits_b = model(images)
+            with torch.autocast(device_type = 'cuda', dtype=torch.float16):
+                logits_d, logits_b = model(images)
             
             #calc loss (calc short for calculate)
             
-            loss_d = criteria_d(logits_d, labels_d)
-            loss_b = criteria_b(logits_b, labels_b)
+                loss_d = criteria_d(logits_d, labels_d)
+                loss_b = criteria_b(logits_b, labels_b)
             
-            loss = loss_b +loss_d
+                loss = loss_b +loss_d
             
             #back pass
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            #loss.backward()
+            #optimizer.step()
+            scaler.update()
             
             train_loss += loss.item()
             loop.set_postfix(loss=loss.item())
@@ -273,11 +277,12 @@ def main(args):
                 images = images.to(device)
                 labels_d = labels_d.to(device)
                 labels_b = labels_b.to(device)
+                with torch.autocast(deivce_type='cuda', dtype=torch.float16):
+                    
+                    logits_d, logits_b = model(images)
                 
-                logits_d, logits_b = model(images)
-                
-                loss_d = criteria_d(logits_d, labels_d)
-                loss_b = criteria_b(logits_b, labels_b)
+                    loss_d = criteria_d(logits_d, labels_d)
+                    loss_b = criteria_b(logits_b, labels_b)
                 
                 val_loss += (loss_d + loss_b).item()
                 

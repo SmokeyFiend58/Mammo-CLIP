@@ -7,8 +7,8 @@ import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, confusion_matrix
-from breastclip.model.mammo_clip import MammoCLIP
-from train_grading import MultiHeadSwin
+from src.codebase.breastclip.model.mammo_clip import MammoCLIP
+from src.codebase.train_grading import MultiHeadSwin
 
 
 log = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ class MammoEval:
         self.device = device
         self.out_path = output_path
         
-        os.makedirs(self.out_path, exists_ok = True)
+        os.makedirs(self.out_path, exist_ok = True)
     
     def decodeOrdinal(self, logits):
         #converts ordinal logits(batch, num_classes-1) into class labels
@@ -70,6 +70,7 @@ class MammoEval:
                     attention_mask = batch['attention_mask'].to(self.device)
                     labels_density = batch['labels_d'].to(self.device)
                     labels_birads = batch['labels_b'].to(self.device)
+                    text_inputs = {'input_ids': input_ids, 'attention_mask':attention_mask}
                 else:
                     #if using train_grading as this returns typle
                     img, labels_density, labels_birads = batch
@@ -114,7 +115,7 @@ class MammoEval:
                 #Birads decoding
                 #oridnal deocidng for BIRADS
                 if b_logits.shape[1] > 1:
-                    pred_birads_class = self.decodeOrdinal(b_logits)
+                    pred_birads_class, _ = self.decodeOrdinal(b_logits)
                 else:
                     pred_birads_class = torch.round(b_logits).clamp(0, 4)
                 

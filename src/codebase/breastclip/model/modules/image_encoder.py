@@ -116,10 +116,12 @@ class EfficientNet_Mammo(nn.Module):
 class SwinTransformer_Mammo(nn.Module):
     #Swin Transformer Wrapper that mimics EfficientNet_Mammo but handles
     #swin tensor shapes and high res
-    def __init__(self, name: str = "swin_tiny_patch4_window7_224", pretrained = False, in_chans=3,  img_size = 1344, p=3, p_trainable = False, eps = 1e-6):
+    
+    #change from swin to swinv2
+    def __init__(self, name: str = "swinv2_tiny_window8_256", pretrained = False, in_chans=3,  img_size = 1344, p=3, p_trainable = False, eps = 1e-6):
         super().__init__()
         #load Swin from timm
-        self.model = timm.create_model(name, pretrained=pretrained, in_chans=in_chans, img_size = img_size, numclasses = 0)
+        self.model = timm.create_model(name, pretrained=pretrained, in_chans=in_chans, img_size = img_size, num_classes = 0)
         #remove classification head
         
         #swin-tiny output dimension is 768

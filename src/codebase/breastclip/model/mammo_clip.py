@@ -4,8 +4,8 @@ from torch import nn
 import torch.nn.functional as F
 import numpy as np
 
-from breastclip.model.modules.image_encoder import SwinTransformer_Mammo
-from breastclip.model.modules.text_encoder import HuggingfaceTextEncoder
+from src.codebase.breastclip.model.modules.image_encoder import SwinTransformer_Mammo
+from src.codebase.breastclip.model.modules.text_encoder import HuggingfaceTextEncoder
 
 class MammoCLIP(nn.Module):
     def __init__(self, image_encoder_name = "swin_tiny_patch4_window7_224", text_encoder_name = "emilyalsentzer/Bio_ClinicalBERT", img_size = 1344, embed_dim = 256,use_aux_heads = False, use_uncertainty = False): # aux heads are for activiating a novelty
