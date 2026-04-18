@@ -21,6 +21,7 @@ from src.codebase.breastclip.model.mammo_clip import MammoCLIP
 from src.codebase.breastclip.model.losses import OrdinalRegressionLoss, GaussianUncertaintyLoss, CentreLoss
 from src.codebase.breastclip.data.MammoCLIPDataset import MammoCLIPDataset
 from src.codebase.breastclip.model.training.logger import ResultsLogger
+import json
 
 class CLIPLoss(nn.Module):
     def __init__(self):
@@ -58,6 +59,24 @@ class CLIPLoss(nn.Module):
         return (loss_i + loss_t) / 2
     
     #removed MammoCLIPdataset
+    
+def load_synthetic_reports(reportsJSONPath):
+    #returns a dict mapping studyid to report text
+    
+    with open(reportsJSONPath) as f:
+        data = json.load(f)
+    report_map = {}
+    
+    for study in data["studies"]:
+        #combines findings text+impresion into one string
+        findings = " ".join(
+            f["text"] for f in study["radiology_report"]["findings"])
+        impression = study["radiology_report"]["impression"]["text"]
+        report_map[study["study_id"]] = f"{findings} {impression}"
+    return report_map
+
+    
+    
 def config():
     parser = argparse.ArgumentParser()
     # Paths
@@ -89,6 +108,10 @@ def config():
     parser.add_argument("--use-uncertainty", action="store_true", help="Enable Aleatoric/Epistemic Uncertainty")
     parser.add_argument("--lr-cent", default=0.5, type=float, help="Learning rate for Center Loss")
     parser.add_argument("--cent-weight", default=0.01, type=float, help="Weight for Center Loss")
+    
+    parser.add_argument("--use-synth-reports", action= "store_true", help="Use synthesized radiology reports as text input")
+    parser.add_argument("--reports-json", type=str, default=None, help="Path to reports.json from report_synthesizer.py")
+    
     
     return parser.parse_args()
 
@@ -158,6 +181,20 @@ def main(args):
     #load all data
     full_dataFrame = pd.read_csv(args.csv_file)
     
+    #if the flag is set, overwrite the text column with synthesized reports
+    if args.use_synth_reports:
+        assert args.reports_json is not None, \
+            "--reports-json required when --use-synth-reports is set"
+        report_map = load_synthetic_reports(args.reports_json)
+        full_dataFrame["text"] = full_dataFrame["study_id"].map(report_map)
+        missing = full_dataFrame["text"].isnull().sum()
+        
+        if missing > 0:
+            print(f"Warning: {missing} rows had no matching report, dropping them")
+            full_dataFrame = full_dataFrame.dropna(subset=["text"])
+            
+
+    
     #isolate training data
     if 'split' in full_dataFrame.columns:
         
@@ -169,22 +206,8 @@ def main(args):
     #create train/val split
     #stratified split also
     train_dataframe, validation_dataframe = train_test_split(train_full_dataframe, test_size= args.val_split, random_state=args.seed, stratify=train_full_dataframe['breast_density'] if 'breast_density' in train_full_dataframe.columns else None)
-    # it says test size in the function but the only data available to get is from the training split so dont worry
     
-    #clean labels for weight calculation
-    ##########train_dataframe['clean_density'] = train_dataframe['breast_density'].apply(lambda x: x[-1] if isinstance(x, str) and len(x) >1 else 'C')
     
-    #######class_counts = train_dataframe['clean_density'].value_counts().sort_index()
-    
-    #######class_weights = 1.0/ class_counts
-    #assign weights
-    #####sample_weights = train_dataframe['clean_density'].map(class_weights).values
-    
-    #####sampler = WeightedRandomSampler(weights=torch.from_numpy(sample_weights).double(), num_samples=len(train_dataframe), replacement=True)
-    
-    #now actually create the datasets
-    
-    #NEW
     tokenizer = AutoTokenizer.from_pretrained(args.text_encoder)
     tfm_dict = get_density_augmentation(img_size = args.img_size)
     
@@ -197,20 +220,6 @@ def main(args):
     
     
 
-    """#transforms
-    train_tfm = load_transform(split="train")
-    valid_tfm = load_transform(split = "valid")
-    
-    #datasets
-    #in real thing, split the csv's into the splits already predefineed
-    #for now, load the same csv for both to get something running
-    
-    train_ds = VinDrSwinDataset(args.csv_file, args.img_dir, transform=train_tfm)
-    train_loader = DataLoader(train_ds, batch_size= args.batch_size, shuffle=True)
-    
-    print(f"Dataset loaded{len(train_ds)}")
-    """
-    
     #model
     model = MammoCLIP(image_encoder_name= args.image_encoder, text_encoder_name=args.text_encoder, img_size=args.img_size, embed_dim=args.embed_dim, use_aux_heads= args.use_aux_heads).to(device)
     for param in model.text_encoder.parameters():
