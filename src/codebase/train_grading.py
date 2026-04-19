@@ -213,7 +213,7 @@ def main(args):
     
     scaler = torch.amp.GradScaler('cuda')
     
-    bestF1 = 0.0
+    bestValidationLoss = float('inf')
     patience = 5
     patienceCounter = 0
     
@@ -312,11 +312,11 @@ def main(args):
         print(f"Avg Loss: {avg_train_loss:.4f}")
         print(f"Density Acc: {acc_d:.4f} |||| BI-RADS Acc: {acc_b:.4f}")
  
-        F1Density = f1_score(all_labels_d, all_prediction_d, average='macro')
-        F1Birads = f1_score(all_labels_b, all_prediction_b, average = 'macro')        
+        #F1Density = f1_score(all_labels_d, all_prediction_d, average='macro')
+        #F1Birads = f1_score(all_labels_b, all_prediction_b, average = 'macro')        
         
         #average of both
-        combinedF1 = (F1Density + F1Birads) / 2
+        #combinedF1 = (F1Density + F1Birads) / 2
         
         #log f1 scores
         writer.add_scalar("F1/Density", F1Density, epoch)
@@ -325,16 +325,16 @@ def main(args):
         
         print(f"F1 Density: {F1Density:.4f}. F1 BIRADS: {F1Birads:.4f}. Combined F1: {combinedF1:.4f}.")
         
-        if combinedF1 > bestF1:
-            bestF1 = combinedF1
+        if avg_val_loss > bestValidationLoss:
+            bestValidationLoss = avg_val_loss
             patienceCounter = 0
             torch.save(model.state_dict(), os.path.join(args.output_path, "best_model.pth"))
-            print(f"New best F1: {bestF1:.4f}. Best model saved")
+            print(f"New best validation loss: {bestF1:.4f}. Best model saved")
         else:
             patienceCounter +=1
             print(f"No improvement ({patienceCounter}/{patience})")
             if patienceCounter >= patience:
-                print(f"Early stopping at epoch {epoch+1}, best F1: {bestF1:.4f}")
+                print(f"Early stopping at epoch {epoch+1}, best validation loss: {bestF1:.4f}")
                 break
                                             
         
