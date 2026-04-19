@@ -195,21 +195,6 @@ def main(args):
     valid_ds = VinDrSwinDataset(validation_dataframe, args.img_dir, transform_dict= tfm_dict, split_group="valid")
     valid_loader = DataLoader(valid_ds, batch_size= args.batch_size, shuffle=False)
     
-
-    """#transforms
-    train_tfm = load_transform(split="train")
-    valid_tfm = load_transform(split = "valid")
-    
-    #datasets
-    #in real thing, split the csv's into the splits already predefineed
-    #for now, load the same csv for both to get something running
-    
-    train_ds = VinDrSwinDataset(args.csv_file, args.img_dir, transform=train_tfm)
-    train_loader = DataLoader(train_ds, batch_size= args.batch_size, shuffle=True)
-    
-    print(f"Dataset loaded{len(train_ds)}")
-    """
-    
     #model
     model = MultiHeadSwin(args.arch, args.img_size, density_loss_type=args.density_loss, birads_loss_type=args.birads_loss).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
@@ -223,12 +208,15 @@ def main(args):
     else:
         criteria_b = nn.CrossEntropyLoss()
     
-    #optimizer and loss
-    ##criteria_d = nn.CrossEntropyLoss()
-    ###criteria_b = nn.CrossEntropyLoss()
     
-    #training loop
+    
+    
     scaler = torch.amp.GradScaler('cuda')
+    
+    bestF1 = 0.0
+    patience = 5
+    patienceCounter = 0
+    
     
     for epoch in range(args.epochs):
         print(f"\nEpoch {epoch}/{args.epochs}")
@@ -271,13 +259,17 @@ def main(args):
         correct_b = 0
         total_samples = 0
         
+        all_prediction_d = []
+        all_labels_d = []
+        all_prediction_b = []
+        all_labels_b = []
         
         with torch.no_grad():
             for images, labels_d, labels_b in valid_loader:
                 images = images.to(device)
                 labels_d = labels_d.to(device)
                 labels_b = labels_b.to(device)
-                with torch.autocast(deivce_type='cuda', dtype=torch.float16):
+                with torch.autocast(device_type='cuda', dtype=torch.float16):
                     
                     logits_d, logits_b = model(images)
                 
@@ -304,7 +296,10 @@ def main(args):
                 
                 total_samples += labels_d.size(0)
                 
-                                
+                all_prediction_d.extend(preds_d.cpu().numpy())
+                all_labels_d.extend(labels_d.cpu().numpy())
+                all_prediction_b.extend(preds_b.cpu().numpy())
+                all_labels_b.extend(labels_b.cpu().numpy())
         avg_val_loss = val_loss / len(valid_loader)
         acc_d = correct_d / total_samples
         acc_b = correct_b / total_samples
@@ -316,7 +311,33 @@ def main(args):
         
         print(f"Avg Loss: {avg_train_loss:.4f}")
         print(f"Density Acc: {acc_d:.4f} |||| BI-RADS Acc: {acc_b:.4f}")
-
+ 
+        F1Density = f1_score(all_labels_d, all_prediction_d, average='macro')
+        F1Birads = f1_score(all_labels_b, all_prediction_b, average = 'macro')        
+        
+        #average of both
+        combinedF1 = (F1Density + F1Birads) / 2
+        
+        #log f1 scores
+        writer.add_scalar("F1/Density", F1Density, epoch)
+        writer.add_scalar("F1/BIRADS", F1Birads, epoch)
+        writer.add_scalar("F1/Combined", combinedF1, epoch)
+        
+        print(f"F1 Density: {F1Density:.4f}. F1 BIRADS: {F1Birads:.4f}. Combined F1: {combinedF1:.4f}.")
+        
+        if combinedF1 > bestF1:
+            bestF1 = combinedF1
+            patienceCounter = 0
+            torch.save(model.state_dict(), os.path.join(args.output_path, "best_model.pth"))
+            print(f"New best F1: {bestF1:.4f}. Best model saved")
+        else:
+            patienceCounter +=1
+            print(f"No improvement ({patienceCounter}/{patience})")
+            if patienceCounter >= patience:
+                print(f"Early stopping at epoch {epoch+1}, best F1: {bestF1:.4f}")
+                break
+                                            
+        
         
         #save every epoch to not lose progess
         torch.save(model.state_dict(), os.path.join(args.output_path, f"Swin_epoch_{epoch+1}.pth"))
