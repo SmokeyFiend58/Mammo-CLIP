@@ -14,13 +14,14 @@ from src.codebase.train_grading import MultiHeadSwin
 log = logging.getLogger(__name__)
 
 class MammoEval:
-    def __init__(self, model, dataloader, device, output_path):
+    def __init__(self, model, dataloader, device, output_path, density_loss = 'ce', birads_loss = 'ce'):
         self.model = model
         self.dataloader = dataloader
         self.device = device
         self.out_path = output_path
-        
-        os.makedirs(self.out_path, exist_ok = True)
+        self.density_loss = density_loss
+        self.birads_loss = birads_loss
+        os.makedirs(self.out_path, exist_ok=True)
     
     def decodeOrdinal(self, logits):
         #converts ordinal logits(batch, num_classes-1) into class labels
@@ -74,9 +75,11 @@ class MammoEval:
                 else:
                     #if using train_grading as this returns typle
                     img, labels_density, labels_birads = batch
-                    img, labels_density, labels_birads = img.to(self.device), labels_density.to(self.device), labels_birads.to(self.device)
+                    img = img.to(self.device)
+                    labels_density = labels_density.to(self.device)
+                    labels_birads = labels_birads.to(self.device)
                     input_ids = None # slight change to make it work with train_grading
-                
+                    attention_mask = None
                 try: 
                     #attempt to do VLM
                     if isinstance(self.model, MammoCLIP):
@@ -87,6 +90,8 @@ class MammoEval:
                 #need the aux out dict from mammo_clip
 
                         _,_,_,_,aux_out = self.model(img, {'input_ids': input_ids, 'attention_mask':attention_mask})
+                        if 'd_class' not in aux_out:
+                            raise RuntimeError("MammoCLIP was built without use_aux_heads=True, cannot eval grading")
                         d_logits = aux_out['d_class']
                         b_logits = aux_out['b_class']
                         
@@ -103,21 +108,39 @@ class MammoEval:
                 
                 
                 #density decoding
+                
+                if self.density_loss == 'mse':
+                    pred_density_class = torch.round(d_logits).squeeze(-1).clamp(0, 3).long()
+                    
+                    all_probs_density.extend(d_logits.squeeze(-1).cpu().numpy())
+                elif d_logits.shape[1] == 3: # MammoCLIP ordinal (4 classes -> 3 thresholds)
+                    pred_density_class, _ = self.decodeOrdinal(d_logits)
+                    all_probs_density.extend(torch.sigmoid(d_logits).cpu().numpy())
+                else: #Cross entropy, 4 classes softmax
+                    probs = torch.softmax(d_logits, dim=1)
+                    pred_density_class = probs.argmax(dim=1)
+                    all_probs_density.extend(probs.cpu().numpy())
+                    
                 #ordinal decoding for density class
-                if d_logits.shape[1] > 1:
-                    pred_density_class, d_probs_raw = self.decodeOrdinal(d_logits)
-                    all_probs_density.extend(torch.sigmoid(d_logits).mean(dim=1).cpu().numpy())
-                else:
+                #if d_logits.shape[1] > 1:
+                #    pred_density_class, d_probs_raw = self.decodeOrdinal(d_logits)
+                #    all_probs_density.extend(torch.sigmoid(d_logits).mean(dim=1).cpu().numpy())
+                #else:
                     #regression MSE case 
-                    pred_density_class = torch.round(d_logits).clamp(0,3)
-                    all_probs_density.extend(torch.sigmoid(d_logits).mean(dim=1).cpu().numpy())
+                 #   pred_density_class = torch.round(d_logits).clamp(0,3)
+                  #  all_probs_density.extend(torch.sigmoid(d_logits).mean(dim=1).cpu().numpy())
 
                 #Birads decoding
                 #oridnal deocidng for BIRADS
-                if b_logits.shape[1] > 1:
+                """if b_logits.shape[1] > 1:
                     pred_birads_class, _ = self.decodeOrdinal(b_logits)
                 else:
-                    pred_birads_class = torch.round(b_logits).clamp(0, 4)
+                    pred_birads_class = torch.round(b_logits).clamp(0, 4)"""
+                if self.birads_loss == 'ordinal' or b_logits.shape[1] == 4:
+                    pred_birads_class, _ = self.decodeOrdinal(b_logits)
+                else: 
+                    #cross entropy 5 class softmax
+                    pred_birads_class = torch.argmax(b_logits, dim=1)
                 
                 all_labels_density.extend(labels_density.cpu().numpy())
                 all_labels_birads.extend(labels_birads.cpu().numpy())
@@ -149,9 +172,10 @@ class MammoEval:
         
         # one vs rest auroc
         try: 
-            auroc_density = roc_auc_score(all_labels_density, all_probs_density, multi_class='ovr')
-        except:
-            auroc_density = 0.0 #fallbackl for if only 1 class present in batch
+            all_probs_density_array = np.stack(all_probs_density) # structure of (n,4)
+            auroc_density = roc_auc_score(all_labels_density, all_probs_density_array, multi_class='ovr', labels=[0,1,2,3])
+        except ValueError:
+            auroc_density = float('nan') #fallbackl for if only 1 class present in batch
         
         print(f"Density --- F1 (macro): {f1_density:.4f} --- Accuracy: {acc_density:.4f} --- AUROC: {auroc_density:.4f}\n")
         
@@ -193,7 +217,8 @@ class MammoEval:
                     if isinstance(output, tuple) and len(output) ==5:
                         aux_out = output[4]
                         
-                    
+                        if 'd_class' not in aux_out:
+                            raise RuntimeError("MammoCLIP built without use_aux_heads=True, cannot eval grading")
                         logits = aux_out["d_class"]
                     elif isinstance(output, tuple) and len(output) ==2:
                         # this is image only

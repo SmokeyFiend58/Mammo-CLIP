@@ -1,11 +1,11 @@
 import torch
 from torch.utils.data import DataLoader
 from src.codebase.MammoEval import MammoEval
-from train_grading import VinDrSwinDataset, config
+
 from src.codebase.breastclip.model.mammo_clip import MammoCLIP
 from src.codebase.breastclip.data import data_utils
 import pandas as pd
-from src.codebase.train_grading import MultiHeadSwin
+from src.codebase.train_grading import MultiHeadSwin, VinDrSwinDataset, config
 
 def testMain():
     args = config()
@@ -31,14 +31,15 @@ def testMain():
         model = MultiHeadSwin(encoder_name=args.arch, img_size=args.img_size, density_loss_type=args.density_loss, birads_loss_type=args.birads_loss).to(device)
     else:
         print("Loading VLM")
-        model = MammoCLIP(image_encoder_name=args.arch, img_size=args.img_size, use_aux_heads= False, use_uncertainty= False).to(device)
+        model = MammoCLIP(image_encoder_name=args.arch,text_encoder_name = "fixed_clinicalbert", img_size=args.img_size, use_aux_heads= True, use_uncertainty= True).to(device)
         
     
     state_dict = torch.load(checkpoint_path)
     model.load_state_dict(state_dict, strict=False)
     
     #run evalation
-    evaluator = MammoEval(model, test_loader, device, output_path="./test_results")
+    evaluator = MammoEval(model, test_loader, device, output_path="./test_results", density_loss = args.density_loss, birads_loss = args.birads_loss)
+    
     
     metrics = evaluator.evalMetrics()
     
