@@ -325,7 +325,7 @@ def main(args):
         
         print(f"F1 Density: {F1Density:.4f}. F1 BIRADS: {F1Birads:.4f}. Combined F1: {combinedF1:.4f}.")
         
-        if avg_val_loss > bestValidationLoss:
+        if avg_val_loss < bestValidationLoss:
             bestValidationLoss = avg_val_loss
             patienceCounter = 0
             torch.save(model.state_dict(), os.path.join(args.output_path, "best_model.pth"))
