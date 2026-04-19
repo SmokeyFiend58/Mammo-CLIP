@@ -319,9 +319,9 @@ def main(args):
         #combinedF1 = (F1Density + F1Birads) / 2
         
         #log f1 scores
-        writer.add_scalar("F1/Density", F1Density, epoch)
-        writer.add_scalar("F1/BIRADS", F1Birads, epoch)
-        writer.add_scalar("F1/Combined", combinedF1, epoch)
+        #writer.add_scalar("F1/Density", F1Density, epoch)
+        #writer.add_scalar("F1/BIRADS", F1Birads, epoch)
+        #writer.add_scalar("F1/Combined", combinedF1, epoch)
         
         print(f"F1 Density: {F1Density:.4f}. F1 BIRADS: {F1Birads:.4f}. Combined F1: {combinedF1:.4f}.")
         
