@@ -166,8 +166,33 @@ def train_one_epoch(model, loader, optimizer, optim_centre, device, args, loss_f
         
     return total_loss / len(loader)
 
-                    
+def val_one_epoch(model, loader,device, args, loss_fns):
+    model.eval()
+    total_loss = 0
+    with torch.no_grad():
+        for batch in tqdm(loader, desc = "Validating", leave = False):
+            img, inp, mask, labelD, labelDp, labelB = batch
+            img, inp, mask = img.to(device), inp.to(device), mask.to(device)
+            labelD, labelDp, labelB = labelD.to(device), labelDp.to(device), labelB.to(device)
+        
+            with torch.amp.autocast('cuda'):
+                img_emb, text_emb, scale, raw_feats, aux_out = model(img, {'input_ids': inp, 'attention_mask': mask})                   
+
+                loss = loss_fns['clip'](img_emb, text_emb, scale)
+                
+                if args.use_aux_heads:
+                    loss += loss_fns['ord_d'](aux_out['d_class'], labelD)
+                    loss += loss_fns['ord_b'](aux_out['b_class'], labelB)
+            total_loss += loss.item()
     
+    averageLoss = total_loss / len(loader)
+    
+    print(f"Validation Loss: {averageLoss:.5f}")
+    
+    return averageLoss
+
+        
+        
 
 def main(args):
     #taken from train_grading with slight modifications
@@ -243,18 +268,43 @@ def main(args):
 
     scalar = torch.amp.GradScaler()
     
+    bestValidationLoss = float('inf')
+    
+    patience = 5
+    patienceCounter = 0
     
     
     for epoch in range(args.epochs):
         
         train_loss = train_one_epoch(model, train_loader, optimizer, optim_centre, device, args, loss_fns, scalar, epoch)
+        val_loss = val_one_epoch(model, valid_loader, device, args, loss_fns)
         
         
-        print(f"Epoch {epoch}: Train Loss {train_loss: .5f}")
         
-        logger.log_epoch(epoch, {'train_loss': train_loss})
+        print(f"Epoch {epoch}: Train Loss {train_loss: .5f}. Validation loss {val_loss:.5f}")
         
-    logger.saveFinalResult(args, {'final_train_loss': train_loss})
+        
+        logger.log_epoch(epoch, {'train_loss': train_loss, 'val_loss': val_loss})
+        if val_loss < bestValidationLoss:
+            bestValidationLoss = val_loss
+            patienceCounter = 0
+            
+            torch.save(model.state_dict(), os.path.join(args.output_path, "Best_clip_model.pth"))
+            print(f"New best validation loss {bestValidationLoss:.5f}")
+            
+        else:
+            patienceCounter += 1
+            print(f" No improvement ({patienceCounter}/{patience})")
+            if patienceCounter >= patience:
+                print(f"Early stopping at epoch {epoch+1}, best validation loss: {bestValidationLoss:.5f}")
+                break
+            
+            
+        
+        
+    logger.saveFinalResult(args, {'final_train_loss': train_loss, 'best_validation_loss': bestValidationLoss})
+    
+    
     
         
         
