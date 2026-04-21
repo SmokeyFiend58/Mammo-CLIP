@@ -181,8 +181,7 @@ class MammoEval:
             probs_arr = np.stack(all_probs_density)
             if probs_arr.shape[1] ==3:
                 #ordinal: convert cumulative thresholds P(y > k) -> per-class P(y = k)
-                if probs_arr.shape[1] == 3:
-                # ordinal: convert cumulative thresholds P(y > k) -> per-class P(y = k)
+                
                 p0 = 1 - probs_arr[:, 0]
                 p1 = probs_arr[:, 0] - probs_arr[:, 1]
                 p2 = probs_arr[:, 1] - probs_arr[:, 2]

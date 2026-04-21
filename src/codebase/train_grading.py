@@ -18,7 +18,7 @@ from src.codebase.breastclip.model.modules.image_encoder import SwinTransformer_
 from src.codebase.breastclip.data.data_utils import load_transform
 from src.codebase.breastclip.data.data_utils import get_density_augmentation
 from src.codebase.breastclip.model.losses import OrdinalRegressionLoss, DensityMSELoss
-
+from src.codebase.breastclip.data.MammoCLIPDataset import clean_density_letter
 warnings.filterwarnings("ignore")
 
 class MultiHeadSwin(nn.Module):
@@ -93,17 +93,11 @@ class VinDrSwinDataset(Dataset):
         image_np = np.array(image)
         #apply augmentation
         
-        density_val = row.get('breast_density', 'C')
-        if isinstance(density_val, str) and len(density_val) > 1:
-            density_val = density_val[-1]
-        elif isinstance(density_val, str) and len(density_val) == 1:
-            pass
-        else:
-            density_val = 'C'
-        
+        density_val = clean_density_letter(row.get('breast_density'))
+
         selected_transform = None
-        
-        if self.split_group == ('valid','test'):
+
+        if self.split_group in ('valid', 'test'):
             selected_transform = self.transform_dict['valid']
         else:
             if density_val in self.rare_density:
@@ -147,6 +141,11 @@ def config():
 
     parser.add_argument("--num-workers", default=0, type=int) # Set 0 for Windows compatibility
     
+    parser.add_argument("--image-encoder", default=None, type=str, help="Backbone name for MammoCLIP eval; falls back to --arch if unset")
+    parser.add_argument("--text-encoder", default="fixed_clinicalbert", type=str,help="HF name for text encoder when loading MammoCLIP")
+    #these are unused by train_grading but matter when test_metrics reaches for them
+    parser.add_argument("--checkpoint", default="./output_swin/best_model.pth", type=str, help="Path to model weights for evaluation")
+    
     
     parser.add_argument("--density-loss", default= "ce", choices=["ce", "mse"], help="Loss for density")
     parser.add_argument("--birads-loss", default="ce", choices=["ce", "ordinal"], help="Loss for BIRADS")
@@ -173,14 +172,17 @@ def main(args):
         train_full_dataframe = full_dataFrame
         print("Warning warning warning: no split column for some stupid reason")
     
-    #create train/val split
-    #stratified split also
-    train_dataframe, validation_dataframe = train_test_split(train_full_dataframe, test_size= args.val_split, random_state=args.seed, stratify=train_full_dataframe['breast_density'] if 'breast_density' in train_full_dataframe.columns else None)
-    # it says test size in the function but the only data available to get is from the training split so dont worry
+   
+    #commented out above due to stratify is incorrect. it stratifies on the raw column, if any 
+    #row has NaN, train_test_split errors. Also inconsistent with how density is used at train time
+    #also fixed the same single letter bug ive fixed previously for densities and the fall back to density C
     
-    #clean labels for weight calculation
-    train_dataframe['clean_density'] = train_dataframe['breast_density'].apply(lambda x: x[-1] if isinstance(x, str) and len(x) >1 else 'C')
+    stratify_column = train_full_dataframe['breast_density'].apply(clean_density_letter) if 'breast_density' in train_full_dataframe else None
+    train_dataframe, validation_dataframe = train_test_split(train_full_dataframe,test_size = args.val_split,random_state=args.seed, stratify = stratify_column)
     
+    train_dataframe = train_dataframe.copy()
+    train_dataframe['clean_density'] = train_dataframe['breastdensity'].apply(clean_density_letter)   
+
     class_counts = train_dataframe['clean_density'].value_counts().sort_index()
     
     class_weights = 1.0/ class_counts
@@ -282,7 +284,7 @@ def main(args):
                 
                 ##decode predictions
                 if args.density_loss == 'mse':
-                    preds_d = torch.round(logits_d).squeeze().clamp(0, 3).long()
+                    preds_d = torch.round(logits_d).squeeze(-1).clamp(0, 3).long()
                 else: 
                     #arg max
                     preds_d = torch.argmax(logits_d, dim = 1)

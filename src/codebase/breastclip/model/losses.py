@@ -31,12 +31,16 @@ class GaussianUncertaintyLoss(nn.Module):
         super().__init__()
         self.nll = nn.GaussianNLLLoss()
     def forward(self, predMean, pred_log_var, target):
-        #pred log.. comes from the network
-        var = torch.exp(pred_log_var)
-        #ensuring variance is positive
+        #flatten to 1D so predMen, var and target share the same shape (b,)
+        #and guassianNLLloss doesnt broadcast to (B,B)
+        predMean = predMean.view(-1)
+        pred_log_var = pred_log_var.view(-1)
+        target = target.view(-1).float()
         
-        if target.dim() == 1:
-            target = target.view(-1,1)
+        var = torch.exp(pred_log_var) # ensures positivity
+
+        #keeping everything 1D is simpler than wrapping all three in (B,1) and matches mammo_clip
+        
         return self.nll(predMean, target, var)
     
 class DensityMSELoss(nn.Module):

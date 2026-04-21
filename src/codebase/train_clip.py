@@ -19,7 +19,7 @@ from src.codebase.utils import seed_all
 from src.codebase.breastclip.data.data_utils import get_density_augmentation
 from src.codebase.breastclip.model.mammo_clip import MammoCLIP
 from src.codebase.breastclip.model.losses import OrdinalRegressionLoss, GaussianUncertaintyLoss, CentreLoss
-from src.codebase.breastclip.data.MammoCLIPDataset import MammoCLIPDataset
+from src.codebase.breastclip.data.MammoCLIPDataset import MammoCLIPDataset, clean_density_letter
 from src.codebase.breastclip.model.training.logger import ResultsLogger
 import json
 
@@ -150,7 +150,7 @@ def train_one_epoch(model, loader, optimizer, optim_centre, device, args, loss_f
                     loss += nn.MSELoss()(aux_out['d_percent_mu'], labelDp.float())
 
             if args.use_centre_loss:
-                loss += 0.01 * loss_fns['centre'](raw_feats, labelD)
+                loss += args.cent_weight * loss_fns['centre'](raw_feats, labelD)
         
         scalar.scale(loss).backward()
         #loss.backward()
@@ -232,18 +232,21 @@ def main(args):
     
     #create train/val split
     #stratified split also
-    train_dataframe, validation_dataframe = train_test_split(train_full_dataframe, test_size= args.val_split, random_state=args.seed, stratify=train_full_dataframe['breast_density'] if 'breast_density' in train_full_dataframe.columns else None)
+    #train_dataframe, validation_dataframe = train_test_split(train_full_dataframe, test_size= args.val_split, random_state=args.seed, stratify=train_full_dataframe['breast_density'] if 'breast_density' in train_full_dataframe.columns else None)
     
+    stratify_column = train_full_dataframe['breast_density'].apply(clean_density_letter) if 'breast_density' in train_full_dataframe.columns else None
     
+    train_dataframe, validation_dataframe = train_test_split(train_full_dataframe, test_size = args.val_split, random_state=args.seed, stratify=stratify_column)
     tokenizer = AutoTokenizer.from_pretrained(args.text_encoder)
-    tfm_dict = get_density_augmentation(img_size = args.img_size)
+    tfm_dict = get_density_augmentation(img_size = args.img_size, include_flip = False)
     
     #slight change to parameters
     train_ds = MammoCLIPDataset(train_dataframe, args.img_dir, tokenizer = tokenizer,transform_dict= tfm_dict, split_group="train")
     train_loader = DataLoader(train_ds, batch_size = args.batch_size, shuffle= True, num_workers=args.num_workers, drop_last=True)
     
     valid_ds = MammoCLIPDataset(validation_dataframe, args.img_dir,tokenizer=tokenizer, transform_dict= tfm_dict, split_group="valid")
-    valid_loader = DataLoader(valid_ds, batch_size= args.batch_size, shuffle=False, num_workers= args.num_workers, drop_last=True)
+    #dont drop_last in the valid because the validation should see every sample
+    valid_loader = DataLoader(valid_ds, batch_size= args.batch_size, shuffle=False, num_workers= args.num_workers, drop_last=False)
     
     
 

@@ -25,31 +25,37 @@ def load_tokenizer(source, pretrained_model_name_or_path, cache_dir, **kwargs):
 
 #data augmentation: need standard augmentation for dominant classes, and increase data size for weaker classes
 
-def get_density_augmentation(img_size = 1344):
+def get_density_augmentation(img_size = 1344, include_flip = True):
+    #horizontal flip must be disabled for CLIP training because the text will not match as it includes
+    #laterality
+    #flipping the image without rewriting the text produces mislabeled image-text pairs
+    
+    flip = [albu.HorizontalFlip(p=0.5)] if include_flip else []
+    
     base_Augmentation = [albu.Resize(height=img_size, width=img_size),
-                        albu.HorizontalFlip(p=0.5),
-                        albu.Normalize(mean = (0.485, 0.465, 0.406), std=(0.229, 0.224, 0.225)),
+                        *flip,
+                        albu.Normalize(mean = (0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
                         ToTensorV2(),]
     #mild texture change for dominant class
     dominant_pipeline = albu.Compose([
         albu.Resize(height=img_size, width=img_size),
-        albu.HorizontalFlip(p=0.5),
+        *flip,
         albu.RandomBrightnessContrast(brightness_limit= 0.1, contrast_limit=0.1, p=0.5),
-        albu.Normalize(mean = (0.485, 0.465, 0.406), std=(0.229, 0.224, 0.225)),
+        albu.Normalize(mean = (0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
         ToTensorV2(),])
     #heavy texture augmentation
     #jitter, noise and blur to force robustness
     
     rare_pipeline = albu.Compose([
         albu.Resize(height=img_size, width=img_size),
-        albu.HorizontalFlip(p=0.5),
+        *flip,
         albu.RandomBrightnessContrast(brightness_limit= 0.1, contrast_limit=0.1, p=0.5),
         albu.OneOf([
                 albu.GaussianBlur(blur_limit=(3,5), p=0.5),
                 albu.Sharpen(alpha=(0.2, 0.5), lightness=(0.5,1.0), p = 0.5),
                 ], p = 0.4),
         albu.GaussNoise(std_range=(0.2,0.44), p = 0.4),    
-        albu.Normalize(mean = (0.485, 0.465, 0.406), std=(0.229, 0.224, 0.225)),
+        albu.Normalize(mean = (0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
         ToTensorV2(),])
     
     validation_pipeline = albu.Compose(base_Augmentation)

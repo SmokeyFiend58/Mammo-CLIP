@@ -1,4 +1,5 @@
 import torch
+import os
 from torch.utils.data import DataLoader
 from src.codebase.MammoEval import MammoEval
 
@@ -25,16 +26,24 @@ def testMain():
     print("loading model")
     
     #load weights
-    checkpoint_path = "./output_swin/Swin_epoch_20.pth"
+    #replaced to not be hardcoded
+    checkpoint_path = args.checkpoint
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(
+            f"No checkpoint at the path - pass --checkpoint to overide"
+        )
+    
     if "Swin" in checkpoint_path:
         print("Loading Image only baseline")
         model = MultiHeadSwin(encoder_name=args.arch, img_size=args.img_size, density_loss_type=args.density_loss, birads_loss_type=args.birads_loss).to(device)
     else:
         print("Loading VLM")
-        model = MammoCLIP(image_encoder_name=args.arch,text_encoder_name = "fixed_clinicalbert", img_size=args.img_size, use_aux_heads= True, use_uncertainty= True).to(device)
+        image_encoder = args.image_encoder or args.arch
+        
+        model = MammoCLIP(image_encoder_name=args.arch,text_encoder_name =args.text_encoder, img_size=args.img_size, use_aux_heads= True, use_uncertainty= True).to(device)
         
     
-    state_dict = torch.load(checkpoint_path)
+    state_dict = torch.load(checkpoint_path, map_location = device)
     model.load_state_dict(state_dict, strict=False)
     
     #run evalation

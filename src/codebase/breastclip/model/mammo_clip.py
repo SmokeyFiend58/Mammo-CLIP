@@ -99,12 +99,16 @@ class MammoCLIP(nn.Module):
             if self.use_uncertainty:
                 aux_out['d_percent_mu'] = d_percent_raw[:, 0]
                 aux_out['d_percent_logvar'] = d_percent_raw[:, 1]
-            else: 
-                aux_out['d_percent_mu'] = d_percent_raw.squeeze()
+            else:
+                # squeeze(-1) NOT squeeze() with B=1 a squeeze() would
+                # collapse the batch dim and break downstream losses.
+                aux_out['d_percent_mu'] = d_percent_raw.squeeze(-1)
                 aux_out['d_percent_logvar'] = None
-            
-            
-            #return everything
-        return image_embeds, text_embeds, self.logit_scale.exp(), images_features, aux_out
+
+        # Clamp to exp(4.6052) ≈ 100 as in CLIP; prevents FP16 overflow under autocast.
+        # Must live OUTSIDE the use_aux_heads block so logit_scale is always defined.
+        logit_scale = self.logit_scale.clamp(0, 4.6052).exp()
+
+        return image_embeds, text_embeds, logit_scale, images_features, aux_out
         
     
