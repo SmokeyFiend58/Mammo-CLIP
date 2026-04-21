@@ -94,14 +94,16 @@ class VinDrSwinDataset(Dataset):
         #apply augmentation
         
         density_val = row.get('breast_density', 'C')
-        if isinstance(density_val, str) and len(density_val)>1:
+        if isinstance(density_val, str) and len(density_val) > 1:
             density_val = density_val[-1]
+        elif isinstance(density_val, str) and len(density_val) == 1:
+            pass
         else:
             density_val = 'C'
         
         selected_transform = None
         
-        if self.split_group == 'valid':
+        if self.split_group == ('valid','test'):
             selected_transform = self.transform_dict['valid']
         else:
             if density_val in self.rare_density:
@@ -120,7 +122,7 @@ class VinDrSwinDataset(Dataset):
             except ValueError:
                 birads_val = 1
         
-        label_d = torch.tensor(self.density_map.get(density_val, 1), dtype=torch.long)
+        label_d = torch.tensor(self.density_map.get(density_val, self.density_map['C']), dtype=torch.long)
         label_b = torch.tensor(self.birads_map.get(birads_val, 0), dtype= torch.long)
     
         return image, label_d, label_b
@@ -323,18 +325,18 @@ def main(args):
         #writer.add_scalar("F1/BIRADS", F1Birads, epoch)
         #writer.add_scalar("F1/Combined", combinedF1, epoch)
         
-        print(f"F1 Density: {F1Density:.4f}. F1 BIRADS: {F1Birads:.4f}. Combined F1: {combinedF1:.4f}.")
+        #print(f"F1 Density: {F1Density:.4f}. F1 BIRADS: {F1Birads:.4f}. Combined F1: {combinedF1:.4f}.")
         
         if avg_val_loss < bestValidationLoss:
             bestValidationLoss = avg_val_loss
             patienceCounter = 0
             torch.save(model.state_dict(), os.path.join(args.output_path, "best_model.pth"))
-            print(f"New best validation loss: {bestF1:.4f}. Best model saved")
+            print(f"New best validation loss: {bestValidationLoss:.4f}. Best model saved")
         else:
             patienceCounter +=1
             print(f"No improvement ({patienceCounter}/{patience})")
             if patienceCounter >= patience:
-                print(f"Early stopping at epoch {epoch+1}, best validation loss: {bestF1:.4f}")
+                print(f"Early stopping at epoch {epoch+1}, best validation loss: {bestValidationLoss:.4f}")
                 break
                                             
         

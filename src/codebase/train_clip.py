@@ -122,7 +122,7 @@ def train_one_epoch(model, loader, optimizer, optim_centre, device, args, loss_f
     loop = tqdm(loader, desc=f"Epoch{epoch}", leave=True)
     
     
-    for batch in loader:
+    for batch in loop:
         img, inp, mask, labelD, labelDp, labelB = batch
         img, inp, mask = img.to(device), inp.to(device), mask.to(device)
         labelD, labelDp, labelB = labelD.to(device), labelDp.to(device), labelB.to(device)
@@ -144,7 +144,7 @@ def train_one_epoch(model, loader, optimizer, optim_centre, device, args, loss_f
                 loss += loss_fns['ord_b'](aux_out['b_class'], labelB)
             
                 if args.use_uncertainty:
-                    loss += loss_fns['gauss'](aux_out['d_percent_mu'], aux_out['d_perc_logvar'], labelDp)
+                    loss += loss_fns['gauss'](aux_out['d_percent_mu'], aux_out['d_percent_logvar'], labelDp)
                 else:
                 #mse is no uncertainty loss
                     loss += nn.MSELoss()(aux_out['d_percent_mu'], labelDp.float())
@@ -155,9 +155,11 @@ def train_one_epoch(model, loader, optimizer, optim_centre, device, args, loss_f
         scalar.scale(loss).backward()
         #loss.backward()
         #optimizer.step()
-        scalar.step(optimizer)
-        if args.use_centre_loss: 
+        scalar.unscale_(optimizer)
+        if args.use_centre_loss:
             scalar.unscale_(optim_centre)
+        scalar.step(optimizer)
+        if args.use_centre_loss:
             scalar.step(optim_centre)
         scalar.update()
         total_loss += loss.item()

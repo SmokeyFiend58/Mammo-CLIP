@@ -32,18 +32,24 @@ class MammoEval:
         
         return pred_labels, probs
 
-    def calcECE(self, preds, labels, n_bins = 10):
-        #expected calibration error
-        # checks if a 90% confidence is a 90% accuracy
-        bin_boundaries = torch.linspace(0,1,n_bins +1)
+    def calcECE(self, confidences, correctness, n_bins=10):
+        # expected calibration error
+        # confidences: (N,) max predicted-class probability
+        # correctness: (N,) 1 if prediction == label, else 0
+        confidences = np.asarray(confidences, dtype=np.float64)
+        correctness = np.asarray(correctness, dtype=np.float64)
+        bin_boundaries = np.linspace(0, 1, n_bins + 1)
+        n = len(confidences)
         ece = 0.0
-        
-    ########        #if preds are logics/class indices we need confidence scores
-    ####assuming preds passed here are the max probabilities for the chosen class    
-        confidences = preds
-        accuracies = (preds  == labels)# placeholder needs raw probs 
-    ####correct loigic in the main loop handles preparation
-        return 0.0
+        for i in range(n_bins):
+            lo, hi = bin_boundaries[i], bin_boundaries[i + 1]
+            in_bin = (confidences > lo) & (confidences <= hi)
+            count = in_bin.sum()
+            if count > 0:
+                acc_bin = correctness[in_bin].mean()
+                conf_bin = confidences[in_bin].mean()
+                ece += (count / n) * abs(acc_bin - conf_bin)
+        return float(ece)
     
     def enable_Dropout(self, m):
         if type(m) == torch.nn.Dropout:
@@ -83,12 +89,13 @@ class MammoEval:
                 try: 
                     #attempt to do VLM
                     if isinstance(self.model, MammoCLIP):
-                        
-                        
-                    
-                #forward pass
-                #need the aux out dict from mammo_clip
-
+                        #build text_inputs only if the batch actually carried text
+                        if input_ids is not None and attention_mask is not None:
+                            text_inputs = {'input_ids': input_ids, 'attention_mask': attention_mask}
+                        else:
+                            text_inputs = None
+                            
+                #need the aux out dict from mammo_cli
                         _,_,_,_,aux_out = self.model(img, {'input_ids': input_ids, 'attention_mask':attention_mask})
                         if 'd_class' not in aux_out:
                             raise RuntimeError("MammoCLIP was built without use_aux_heads=True, cannot eval grading")
@@ -120,28 +127,22 @@ class MammoEval:
                     probs = torch.softmax(d_logits, dim=1)
                     pred_density_class = probs.argmax(dim=1)
                     all_probs_density.extend(probs.cpu().numpy())
-                    
-                #ordinal decoding for density class
-                #if d_logits.shape[1] > 1:
-                #    pred_density_class, d_probs_raw = self.decodeOrdinal(d_logits)
-                #    all_probs_density.extend(torch.sigmoid(d_logits).mean(dim=1).cpu().numpy())
-                #else:
-                    #regression MSE case 
-                 #   pred_density_class = torch.round(d_logits).clamp(0,3)
-                  #  all_probs_density.extend(torch.sigmoid(d_logits).mean(dim=1).cpu().numpy())
-
-                #Birads decoding
-                #oridnal deocidng for BIRADS
-                """if b_logits.shape[1] > 1:
+                
+                
+                #made the decoding purely shape based, and no CLI flags. So there is no way for the flag to disagree.
+                if b_logits.shape[1] == 4:
                     pred_birads_class, _ = self.decodeOrdinal(b_logits)
+                elif b_logits.shape[1] == 5:
+                    pred_birads_class = torch.argmax(b_logits, dim=1)
                 else:
-                    pred_birads_class = torch.round(b_logits).clamp(0, 4)"""
+                    raise ValueError(f"Unexpected BIRADS logit shape") 
+                """
                 if self.birads_loss == 'ordinal' or b_logits.shape[1] == 4:
                     pred_birads_class, _ = self.decodeOrdinal(b_logits)
                 else: 
                     #cross entropy 5 class softmax
                     pred_birads_class = torch.argmax(b_logits, dim=1)
-                
+                """
                 all_labels_density.extend(labels_density.cpu().numpy())
                 all_labels_birads.extend(labels_birads.cpu().numpy())
                 
@@ -170,24 +171,77 @@ class MammoEval:
         f1_birads = f1_score(all_labels_birads, all_preds_birads, average='macro')
         acc_birads = accuracy_score(all_labels_birads, all_preds_birads)
         
+        #apparently this is so buggy! claude debugging 
+        #explanation: ordinal density for AUROC always NaN. For ordinal density, all_probs_density holds (N, 3) cumulative sigmoids
+        # [P(y>0), P(y>1), P(y>2)] but roc_auc_score(multi_class = 'ovr', labels=[0,1,2,3]) expects per class (N,4).
+        #Conversion to per-class probs already exists for ECE.
         # one vs rest auroc
-        try: 
+        
+        if self.density_loss != 'mse':
+            probs_arr = np.stack(all_probs_density)
+            if probs_arr.shape[1] ==3:
+                #ordinal: convert cumulative thresholds P(y > k) -> per-class P(y = k)
+                if probs_arr.shape[1] == 3:
+                # ordinal: convert cumulative thresholds P(y > k) -> per-class P(y = k)
+                p0 = 1 - probs_arr[:, 0]
+                p1 = probs_arr[:, 0] - probs_arr[:, 1]
+                p2 = probs_arr[:, 1] - probs_arr[:, 2]
+                p3 = probs_arr[:, 2]
+                class_probs = np.stack([p0, p1, p2, p3], axis=1)
+            else:
+                class_probs = probs_arr
+            try:
+                auroc_density = roc_auc_score(all_labels_density, class_probs, multi_class = 'ovr', labels = [0, 1, 2, 3])
+            except ValueError:
+                auroc_density = float('nan') #class missing from the split
+            
+            confidences = class_probs.max(axis=1)
+            correctness = (np.array(all_preds_density) == np.array(all_labels_density)).astype(np.float64)
+            ece_density = self.calcECE(confidences, correctness)
+        else:
+            auroc_density = float('nan')
+            ece_density = float('nan')
+            
+        
+        
+        """     
+        try:
             all_probs_density_array = np.stack(all_probs_density) # structure of (n,4)
             auroc_density = roc_auc_score(all_labels_density, all_probs_density_array, multi_class='ovr', labels=[0,1,2,3])
         except ValueError:
             auroc_density = float('nan') #fallbackl for if only 1 class present in batch
-        
-        print(f"Density --- F1 (macro): {f1_density:.4f} --- Accuracy: {acc_density:.4f} --- AUROC: {auroc_density:.4f}\n")
-        
+
+        # ECE for density
+        if self.density_loss != 'mse':
+            probs_arr = np.stack(all_probs_density)
+            if probs_arr.shape[1] == 3:
+                # ordinal: convert cumulative thresholds P(y > k) -> per-class P(y = k)
+                p0 = 1 - probs_arr[:, 0]
+                p1 = probs_arr[:, 0] - probs_arr[:, 1]
+                p2 = probs_arr[:, 1] - probs_arr[:, 2]
+                p3 = probs_arr[:, 2]
+                class_probs = np.stack([p0, p1, p2, p3], axis=1)
+            else:
+                class_probs = probs_arr
+            confidences = class_probs.max(axis=1)
+            correctness = (np.array(all_preds_density) == np.array(all_labels_density)).astype(np.float64)
+            ece_density = self.calcECE(confidences, correctness)
+        else:
+            ece_density = float('nan')
+        """
+        print(f"Density --- F1 (macro): {f1_density:.4f} --- Accuracy: {acc_density:.4f} --- AUROC: {auroc_density:.4f} --- ECE: {ece_density:.4f}\n")
+
         print(f"BIRADS --- F1 (macro): {f1_birads:.4f} --- Accuracy: {acc_birads:.4f}")
-        
-        #per class sensitivity 
+
+        #per class sensitivity
         #confusion matrix
-        
+
         confusion_matrix_density = confusion_matrix(all_labels_density, all_preds_density)
         print("\n Density Confusion Matirx: \n", confusion_matrix_density)
-        
-        return {"f1_density": f1_density, "f1_birads": f1_birads, "aleatoric": np.mean(all_aleatoric)if all_aleatoric else 0}
+
+        return {"f1_density": f1_density, "f1_birads": f1_birads,
+                "auroc_density": auroc_density, "ece_density": ece_density,
+                "aleatoric": np.mean(all_aleatoric) if all_aleatoric else 0}
     
     def evalUncertaintyMCDROPOUT(self, mc_samples = 10):
         self.model.eval()
