@@ -87,7 +87,7 @@ def config():
     # Model
     parser.add_argument("--image-encoder", default= "swinv2_tiny_window8_256",type=str)
     #parser.add_argument("--text-encoder", default="emilyalsentzer/Bio_ClinicalBERT", type=str)
-    parser.add_argument("--text-encoder", default="fixed_clinicalbert", type=str)
+    parser.add_argument("--text-encoder", default="bioclinical_modernbert", type=str)
     #errors as partitions must be divisiable 128
     parser.add_argument("--img-size", default=1280, type=int)   
     parser.add_argument("--embed-dim", default=512, type=int)

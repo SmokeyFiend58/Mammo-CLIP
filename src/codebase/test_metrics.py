@@ -33,7 +33,7 @@ def testMain():
             f"No checkpoint at the path - pass --checkpoint to overide"
         )
     
-    if "Swin" in checkpoint_path:
+    if "swin" in checkpoint_path.lower():
         print("Loading Image only baseline")
         model = MultiHeadSwin(encoder_name=args.arch, img_size=args.img_size, density_loss_type=args.density_loss, birads_loss_type=args.birads_loss).to(device)
     else:

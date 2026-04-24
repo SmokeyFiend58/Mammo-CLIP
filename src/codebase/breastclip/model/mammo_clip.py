@@ -75,8 +75,9 @@ class MammoCLIP(nn.Module):
         if text_inputs is not None:
             
             text_ouputs = self.text_encoder(text_inputs)
-            #pooling: take the first token CLS (index 0) to represent the sentence
-            text_features = text_ouputs[:, 0, :]
+            #attention-mask-weighted mean pooling (ModernBERT isn't CLS-optimised)
+            mask = text_inputs['attention_mask'].unsqueeze(-1).float()
+            text_features = (text_ouputs * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-6)
             # projection
             text_embeds = self.text_projection(text_features)
            

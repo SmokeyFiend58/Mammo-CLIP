@@ -181,7 +181,7 @@ def main(args):
     train_dataframe, validation_dataframe = train_test_split(train_full_dataframe,test_size = args.val_split,random_state=args.seed, stratify = stratify_column)
     
     train_dataframe = train_dataframe.copy()
-    train_dataframe['clean_density'] = train_dataframe['breastdensity'].apply(clean_density_letter)   
+    train_dataframe['clean_density'] = train_dataframe['breast_density'].apply(clean_density_letter)   
 
     class_counts = train_dataframe['clean_density'].value_counts().sort_index()
     
