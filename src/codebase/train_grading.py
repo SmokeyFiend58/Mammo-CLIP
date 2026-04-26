@@ -2,6 +2,7 @@
 import warnings
 import argparse
 import os
+import re
 import torch
 import torch.nn as nn
 import pandas as pd
@@ -163,7 +164,19 @@ def main(args):
     
     #load all data
     full_dataFrame = pd.read_csv(args.csv_file)
-    
+
+    #filter out BI-RADS 0 (incomplete assessment, not a final grade)
+    def extractBIRADS(raw):
+        if pd.isnull(raw):
+            return None
+        m = re.search(r"[0-6]", str(raw))
+        return int(m.group(0)) if m else None
+
+    before = len(full_dataFrame)
+    full_dataFrame['_birads_int'] = full_dataFrame['breast_birads'].apply(extractBIRADS)
+    full_dataFrame = full_dataFrame[full_dataFrame['_birads_int'].between(1, 5)].drop(columns=['_birads_int'])
+    print(f"Filtered BI-RADS outside 1-5 (incl. 0/6/NaN): {before} -> {len(full_dataFrame)} rows")
+
     #isolate training data
     if 'split' in full_dataFrame.columns:
         

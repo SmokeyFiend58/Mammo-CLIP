@@ -92,7 +92,7 @@ class MammoCLIP(nn.Module):
         #auxlirary outputs!!
         if self.use_aux_heads:
             #applying dropout only if training or doing mc sampling
-            features_dropped = self.dropout(images_features) if self.use_uncertainty else images_features
+            features_dropped = self.dropout(images_features)
             aux_out['d_class'] = self.head_density_class(features_dropped)
             aux_out['b_class'] = self.head_birads(features_dropped)
             

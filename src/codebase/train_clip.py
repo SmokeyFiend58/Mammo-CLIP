@@ -3,6 +3,7 @@
 #tokenizer: it requires the BERT tokenizer to process the text
 
 import os
+import re
 import argparse
 import torch
 import torch.nn as nn
@@ -95,7 +96,7 @@ def config():
 
     # Training
     parser.add_argument("--batch-size", default=2, type=int) # Low batch size for high res!
-    parser.add_argument("--epochs", default=15, type=int)
+    parser.add_argument("--epochs", default=25, type=int)
     parser.add_argument("--lr", default=5e-5, type=float)
     parser.add_argument("--seed", default=42, type=int)
     parser.add_argument("--val-split", default=0.2, type=float)
@@ -207,7 +208,19 @@ def main(args):
     
     #load all data
     full_dataFrame = pd.read_csv(args.csv_file)
-    
+
+    #filter out BI-RADS 0 (incomplete assessment, not a final grade)
+    def extractBIRADS(raw):
+        if pd.isnull(raw):
+            return None
+        m = re.search(r"[0-6]", str(raw))
+        return int(m.group(0)) if m else None
+
+    before = len(full_dataFrame)
+    full_dataFrame['_birads_int'] = full_dataFrame['breast_birads'].apply(extractBIRADS)
+    full_dataFrame = full_dataFrame[full_dataFrame['_birads_int'].between(1, 5)].drop(columns=['_birads_int'])
+    print(f"Filtered BI-RADS outside 1-5 (incl. 0/6/NaN): {before} -> {len(full_dataFrame)} rows")
+
     #if the flag is set, overwrite the text column with synthesized reports
     if args.use_synth_reports:
         assert args.reports_json is not None, \

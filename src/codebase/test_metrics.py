@@ -1,5 +1,6 @@
 import torch
 import os
+import re
 from torch.utils.data import DataLoader
 from src.codebase.MammoEval import MammoEval
 
@@ -13,8 +14,21 @@ def testMain():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     #setup data
-    
+
     dataframe = pd.read_csv(args.csv_file)
+
+    #filter out BI-RADS 0 (incomplete assessment, not a final grade) to match training distribution
+    def extractBIRADS(raw):
+        if pd.isnull(raw):
+            return None
+        m = re.search(r"[0-6]", str(raw))
+        return int(m.group(0)) if m else None
+
+    before = len(dataframe)
+    dataframe['_birads_int'] = dataframe['breast_birads'].apply(extractBIRADS)
+    dataframe = dataframe[dataframe['_birads_int'].between(1, 5)].drop(columns=['_birads_int'])
+    print(f"Filtered BI-RADS outside 1-5 (incl. 0/6/NaN): {before} -> {len(dataframe)} rows")
+
     testDataframe = dataframe[dataframe['split']== 'test']
     
     #no augmentation
