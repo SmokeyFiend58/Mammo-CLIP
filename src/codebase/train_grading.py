@@ -43,6 +43,9 @@ class MultiHeadSwin(nn.Module):
         #head 1 density
         if density_loss_type == 'mse':
             self.head_density = nn.Linear(inputDim, 1)
+        elif density_loss_type == 'ordinal':
+            #4 classes -> 3 thresholds
+            self.head_density = nn.Linear(inputDim, 3)
         else:
             self.head_density = nn.Linear(inputDim, 4)
         
@@ -148,7 +151,7 @@ def config():
     parser.add_argument("--checkpoint", default="./output_swin/best_model.pth", type=str, help="Path to model weights for evaluation")
     
     
-    parser.add_argument("--density-loss", default= "ce", choices=["ce", "mse"], help="Loss for density")
+    parser.add_argument("--density-loss", default= "ce", choices=["ce", "mse", "ordinal"], help="Loss for density")
     parser.add_argument("--birads-loss", default="ce", choices=["ce", "ordinal"], help="Loss for BIRADS")
     
     
@@ -218,10 +221,12 @@ def main(args):
     
     if args.density_loss == 'mse':
         criteria_d = DensityMSELoss()
-    else: 
+    elif args.density_loss == 'ordinal':
+        criteria_d = OrdinalRegressionLoss(num_classes=4)
+    else:
         criteria_d = nn.CrossEntropyLoss()
     if args.birads_loss == 'ordinal':
-        criteria_b = OrdinalRegressionLoss()
+        criteria_b = OrdinalRegressionLoss(num_classes=5)
     else:
         criteria_b = nn.CrossEntropyLoss()
     
@@ -298,7 +303,10 @@ def main(args):
                 ##decode predictions
                 if args.density_loss == 'mse':
                     preds_d = torch.round(logits_d).squeeze(-1).clamp(0, 3).long()
-                else: 
+                elif args.density_loss == 'ordinal':
+                    #count thresholds passed -> class index in [0, 3]
+                    preds_d = (torch.sigmoid(logits_d) > 0.5).sum(dim=1)
+                else:
                     #arg max
                     preds_d = torch.argmax(logits_d, dim = 1)
                 

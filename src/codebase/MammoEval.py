@@ -95,8 +95,11 @@ class MammoEval:
                         else:
                             text_inputs = None
                             
-                #need the aux out dict from mammo_cli
-                        _,_,_,_,aux_out = self.model(img, {'input_ids': input_ids, 'attention_mask':attention_mask})
+                #need the aux out dict from mammo_clip; pass text_inputs (which is None
+                #when the loader doesn't carry text) so the model skips the text branch
+                #cleanly instead of forwarding {'input_ids': None, 'attention_mask': None}
+                #into HuggingFace which rejects it.
+                        _,_,_,_,aux_out = self.model(img, text_inputs)
                         if 'd_class' not in aux_out:
                             raise RuntimeError("MammoCLIP was built without use_aux_heads=True, cannot eval grading")
                         d_logits = aux_out['d_class']

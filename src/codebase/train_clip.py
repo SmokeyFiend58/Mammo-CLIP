@@ -110,7 +110,7 @@ def config():
     parser.add_argument("--lr-cent", default=0.5, type=float, help="Learning rate for Center Loss")
     parser.add_argument("--cent-weight", default=0.01, type=float, help="Weight for Center Loss")
     
-    parser.add_argument("--use-synth-reports", action= "store_true", help="Use synthesized radiology reports as text input")
+    parser.add_argument("--use-synth-reports", action="store_true", help="Use synthesized radiology reports as text input")
     parser.add_argument("--reports-json", type=str, default=None, help="Path to reports.json from report_synthesizer.py")
     
     
@@ -264,7 +264,7 @@ def main(args):
     
 
     #model
-    model = MammoCLIP(image_encoder_name= args.image_encoder, text_encoder_name=args.text_encoder, img_size=args.img_size, embed_dim=args.embed_dim, use_aux_heads= args.use_aux_heads).to(device)
+    model = MammoCLIP(image_encoder_name= args.image_encoder, text_encoder_name=args.text_encoder, img_size=args.img_size, embed_dim=args.embed_dim, use_aux_heads= args.use_aux_heads, use_uncertainty= args.use_uncertainty).to(device)
     for param in model.text_encoder.parameters():
         param.requires_grad = False
         

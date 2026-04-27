@@ -47,17 +47,36 @@ def testMain():
             f"No checkpoint at the path - pass --checkpoint to overide"
         )
     
+    state_dict = torch.load(checkpoint_path, map_location = device)
+
     if "swin" in checkpoint_path.lower():
         print("Loading Image only baseline")
         model = MultiHeadSwin(encoder_name=args.arch, img_size=args.img_size, density_loss_type=args.density_loss, birads_loss_type=args.birads_loss).to(device)
     else:
         print("Loading VLM")
         image_encoder = args.image_encoder or args.arch
-        
-        model = MammoCLIP(image_encoder_name=args.arch,text_encoder_name =args.text_encoder, img_size=args.img_size, use_aux_heads= True, use_uncertainty= True).to(device)
-        
-    
-    state_dict = torch.load(checkpoint_path, map_location = device)
+
+        #infer embed_dim from the saved projection weight, so we don't
+        #have to remember which run used 256 vs 512.
+        if "image_projection.weight" in state_dict:
+            embed_dim = state_dict["image_projection.weight"].shape[0]
+        else:
+            embed_dim = 512
+        print(f"  inferred embed_dim from checkpoint: {embed_dim}")
+
+        #infer use_uncertainty from the density-percentage head shape.
+        #if it has 2 outputs the run trained the (mu, log var) Gaussian-NLL head;
+        #if it has 1 output the run used plain MSE.
+        #aux heads themselves are presumed present for any cell we test.
+        has_aux = "head_density_class.weight" in state_dict
+        if "head_density_perc.weight" in state_dict:
+            use_unc = state_dict["head_density_perc.weight"].shape[0] == 2
+        else:
+            use_unc = False
+        print(f"  inferred use_aux_heads={has_aux}, use_uncertainty={use_unc}")
+
+        model = MammoCLIP(image_encoder_name=args.arch,text_encoder_name =args.text_encoder, img_size=args.img_size, embed_dim=embed_dim, use_aux_heads= has_aux, use_uncertainty= use_unc).to(device)
+
     model.load_state_dict(state_dict, strict=False)
     
     #run evalation
