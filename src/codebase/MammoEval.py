@@ -64,6 +64,7 @@ class MammoEval:
         all_preds_birads = []
         
         all_probs_density = [] #density probabilities
+        all_probs_birads = [] #BI-RADS probabilities (for AUROC + ECE)
         all_aleatoric = [] # density % variance
         
         print("Running eval")
@@ -135,10 +136,14 @@ class MammoEval:
                 #made the decoding purely shape based, and no CLI flags. So there is no way for the flag to disagree.
                 if b_logits.shape[1] == 4:
                     pred_birads_class, _ = self.decodeOrdinal(b_logits)
+                    #cumulative threshold probs P(y > k); converted to per-class below
+                    all_probs_birads.extend(torch.sigmoid(b_logits).cpu().numpy())
                 elif b_logits.shape[1] == 5:
-                    pred_birads_class = torch.argmax(b_logits, dim=1)
+                    probs_b = torch.softmax(b_logits, dim=1)
+                    pred_birads_class = probs_b.argmax(dim=1)
+                    all_probs_birads.extend(probs_b.cpu().numpy())
                 else:
-                    raise ValueError(f"Unexpected BIRADS logit shape") 
+                    raise ValueError(f"Unexpected BIRADS logit shape")
                 """
                 if self.birads_loss == 'ordinal' or b_logits.shape[1] == 4:
                     pred_birads_class, _ = self.decodeOrdinal(b_logits)
@@ -203,10 +208,33 @@ class MammoEval:
         else:
             auroc_density = float('nan')
             ece_density = float('nan')
-            
-        
-        
-        """     
+
+        #BI-RADS AUROC + ECE — mirror the density treatment.
+        #ordinal head emits 4 cumulative thresholds (5 classes); CE head emits 5 softmax probs already.
+        if all_probs_birads:
+            probs_b_arr = np.stack(all_probs_birads)
+            if probs_b_arr.shape[1] == 4:
+                #ordinal: cumulative P(y>k) -> per-class P(y=k) for k in {0..4}
+                q0 = 1 - probs_b_arr[:, 0]
+                q1 = probs_b_arr[:, 0] - probs_b_arr[:, 1]
+                q2 = probs_b_arr[:, 1] - probs_b_arr[:, 2]
+                q3 = probs_b_arr[:, 2] - probs_b_arr[:, 3]
+                q4 = probs_b_arr[:, 3]
+                class_probs_b = np.stack([q0, q1, q2, q3, q4], axis=1)
+            else:
+                class_probs_b = probs_b_arr
+            try:
+                auroc_birads = roc_auc_score(all_labels_birads, class_probs_b, multi_class='ovr', labels=[0, 1, 2, 3, 4])
+            except ValueError:
+                auroc_birads = float('nan')
+            confidences_b = class_probs_b.max(axis=1)
+            correctness_b = (np.array(all_preds_birads) == np.array(all_labels_birads)).astype(np.float64)
+            ece_birads = self.calcECE(confidences_b, correctness_b)
+        else:
+            auroc_birads = float('nan')
+            ece_birads = float('nan')
+
+        """
         try:
             all_probs_density_array = np.stack(all_probs_density) # structure of (n,4)
             auroc_density = roc_auc_score(all_labels_density, all_probs_density_array, multi_class='ovr', labels=[0,1,2,3])
@@ -233,16 +261,20 @@ class MammoEval:
         """
         print(f"Density --- F1 (macro): {f1_density:.4f} --- Accuracy: {acc_density:.4f} --- AUROC: {auroc_density:.4f} --- ECE: {ece_density:.4f}\n")
 
-        print(f"BIRADS --- F1 (macro): {f1_birads:.4f} --- Accuracy: {acc_birads:.4f}")
+        print(f"BIRADS  --- F1 (macro): {f1_birads:.4f} --- Accuracy: {acc_birads:.4f} --- AUROC: {auroc_birads:.4f} --- ECE: {ece_birads:.4f}")
 
         #per class sensitivity
         #confusion matrix
 
         confusion_matrix_density = confusion_matrix(all_labels_density, all_preds_density)
-        print("\n Density Confusion Matirx: \n", confusion_matrix_density)
+        print("\n Density Confusion Matrix: \n", confusion_matrix_density)
+
+        confusion_matrix_birads = confusion_matrix(all_labels_birads, all_preds_birads)
+        print("\n BIRADS Confusion Matrix: \n", confusion_matrix_birads)
 
         return {"f1_density": f1_density, "f1_birads": f1_birads,
                 "auroc_density": auroc_density, "ece_density": ece_density,
+                "auroc_birads": auroc_birads, "ece_birads": ece_birads,
                 "aleatoric": np.mean(all_aleatoric) if all_aleatoric else 0}
     
     def evalUncertaintyMCDROPOUT(self, mc_samples = 10):
